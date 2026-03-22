@@ -31,15 +31,15 @@ using Xbyak_aarch64::XReg;
 
 template <typename Fn>
 inline void EmitWithVmxFpcr(A64Emitter& e, Fn&& emit_op) {
-  // VMX vector FP uses round-to-nearest with flush-to-zero, but the scalar
-  // PPC FP path keeps its own FPCR state. Save and restore around each VMX op
-  // so vector code doesn't leak FPCR changes into later scalar instructions.
+  // VMX vector FP uses its own cached FPCR state in the backend context. Save
+  // and restore around each VMX op so vector code doesn't leak FPCR changes
+  // into later scalar instructions.
   e.mrs(e.x13, 3, 3, 4, 4, 0);
-  e.mov(e.x14, e.x13);
-  e.mov(e.x15, ~static_cast<uint64_t>(0b11u << 22));
-  e.and_(e.x14, e.x14, e.x15);
-  e.orr(e.x14, e.x14, static_cast<uint64_t>(1u << 24));
-  e.msr(3, 3, 4, 4, 0, e.x14);
+  e.sub(e.x14, e.GetContextReg(),
+        static_cast<uint32_t>(sizeof(A64BackendContext)));
+  e.ldr(e.w15, Xbyak_aarch64::ptr(e.x14, static_cast<uint32_t>(offsetof(
+                                             A64BackendContext, fpcr_vmx))));
+  e.msr(3, 3, 4, 4, 0, e.x15);
   emit_op();
   e.msr(3, 3, 4, 4, 0, e.x13);
 }

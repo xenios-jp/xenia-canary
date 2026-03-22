@@ -4874,8 +4874,8 @@ EMITTER_OPCODE_TABLE(OPCODE_TO_SINGLE, TOSINGLE);
 // ============================================================================
 struct SET_NJM : Sequence<SET_NJM, I<OPCODE_SET_NJM, VoidOp, I8Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    // NJM feeds the PPC estimate helpers through backend context state, not the
-    // live host FPCR. VMX ops force their own scoped FPCR settings separately.
+    // NJM updates both the helper flags and the cached VMX FPCR used by vector
+    // float ops. When NJM is off, VMX executes without flush-to-zero.
     e.sub(e.x17, e.GetContextReg(),
           static_cast<uint32_t>(sizeof(A64BackendContext)));
     e.ldr(e.w0, ptr(e.x17,
@@ -4884,17 +4884,23 @@ struct SET_NJM : Sequence<SET_NJM, I<OPCODE_SET_NJM, VoidOp, I8Op>> {
     if (i.src1.is_constant) {
       if (i.src1.constant()) {
         e.orr(e.w0, e.w0, e.w1);
+        e.mov(e.w2, DEFAULT_VMX_FPCR);
       } else {
         e.bic(e.w0, e.w0, e.w1);
+        e.mov(e.w2, 0u);
       }
     } else {
       e.bic(e.w0, e.w0, e.w1);
       e.tst(i.src1, 1);
       e.csel(e.w1, e.w1, e.wzr, Xbyak_aarch64::Cond::NE);
       e.orr(e.w0, e.w0, e.w1);
+      e.mov(e.w2, DEFAULT_VMX_FPCR);
+      e.csel(e.w2, e.w2, e.wzr, Xbyak_aarch64::Cond::NE);
     }
     e.str(e.w0, ptr(e.x17,
                     static_cast<uint32_t>(offsetof(A64BackendContext, flags))));
+    e.str(e.w2, ptr(e.x17, static_cast<uint32_t>(
+                               offsetof(A64BackendContext, fpcr_vmx))));
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_SET_NJM, SET_NJM);
