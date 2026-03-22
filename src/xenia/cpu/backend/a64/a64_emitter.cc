@@ -45,7 +45,8 @@ namespace a64 {
 using namespace Xbyak_aarch64;
 
 // Defined in a64_backend.cc.
-extern uint64_t ResolveFunction(void* raw_context, uint64_t target_address);
+extern uint64_t ResolveFunction(void* raw_context, uint64_t target_address,
+                                uint64_t host_return_address);
 
 static uint64_t UndefinedCallExtern(void* raw_context, uint64_t function_ptr) {
   auto function = reinterpret_cast<Function*>(function_ptr);
@@ -332,6 +333,12 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
   assert_not_null(function);
   ForgetFpcrMode();
   auto fn = static_cast<A64Function*>(function);
+  auto inline_resolve_target = [&](const Xbyak_aarch64::WReg& guest_target) {
+    mov(w1, guest_target);
+    mov(x2, x30);
+    CallNativeSafe(reinterpret_cast<void*>(&ResolveFunction));
+    mov(x9, x0);
+  };
 
   if (fn->machine_code()) {
     // Direct call — function is already compiled.
@@ -359,15 +366,19 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
 
   if (code_cache_->has_indirection_table()) {
     // Load host code address from indirection table.
-    mov(w16, function->address());
+    mov(w17, function->address());
+    mov(w16, w17);
     ldr(w9, ptr(x16, static_cast<uint32_t>(0)));
+    auto& call_ready = NewCachedLabel();
+    mov(x15, reinterpret_cast<uint64_t>(backend()->resolve_function_thunk()));
+    cmp(x9, x15);
+    b(NE, call_ready);
+    inline_resolve_target(w17);
+    L(call_ready);
   } else {
     // Fallback: resolve at runtime.
-    mov(x0, x20);  // context
-    mov(x1, static_cast<uint64_t>(function->address()));
-    mov(x9, reinterpret_cast<uint64_t>(&ResolveFunction));
-    blr(x9);
-    mov(x9, x0);  // resolved address in x9
+    mov(w17, function->address());
+    inline_resolve_target(w17);
   }
 
   if (instr->flags & hir::CALL_TAIL) {
@@ -391,6 +402,12 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
 void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
   ForgetFpcrMode();
   auto target_w = WReg(reg_index);
+  auto inline_resolve_target = [&](const Xbyak_aarch64::WReg& guest_target) {
+    mov(w1, guest_target);
+    mov(x2, x30);
+    CallNativeSafe(reinterpret_cast<void*>(&ResolveFunction));
+    mov(x9, x0);
+  };
 
   // Check if this is a possible return (e.g., PPC blr).
   if (instr->flags & hir::CALL_POSSIBLE_RETURN) {
@@ -402,17 +419,20 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
 
   // Load host code address from indirection table.
   if (code_cache_->has_indirection_table()) {
-    mov(w16, target_w);  // w16 = guest address (also used by resolve thunk)
+    mov(w17, target_w);  // Preserve the guest target for the resolve thunk.
+    mov(w16, w17);
     ldr(w9, ptr(x16, static_cast<uint32_t>(
                          0)));  // w9 = host code from indirection table
+    auto& call_ready = NewCachedLabel();
+    mov(x15, reinterpret_cast<uint64_t>(backend()->resolve_function_thunk()));
+    cmp(x9, x15);
+    b(NE, call_ready);
+    inline_resolve_target(w17);
+    L(call_ready);
   } else {
     // Fallback: resolve at runtime.
-    mov(w16, target_w);
-    mov(x0, x20);  // context
-    mov(x1, x16);  // guest address
-    mov(x9, reinterpret_cast<uint64_t>(&ResolveFunction));
-    blr(x9);
-    mov(x9, x0);  // resolved address
+    mov(w17, target_w);
+    inline_resolve_target(w17);
   }
 
   if (instr->flags & hir::CALL_TAIL) {

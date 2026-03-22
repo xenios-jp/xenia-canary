@@ -36,6 +36,8 @@
 #include "xenia/cpu/thread_state.h"
 #include "xenia/cpu/xex_module.h"
 
+DECLARE_bool(record_mmio_access_exceptions);
+
 DEFINE_int64(a64_max_stackpoints, 65536,
              "Max number of host->guest stack mappings we can record.", "a64");
 
@@ -52,7 +54,13 @@ namespace a64 {
 
 // Resolve a guest function at runtime. Called by the resolve thunk when
 // a guest address has not yet been compiled.
-uint64_t ResolveFunction(void* raw_context, uint64_t target_address);
+uint64_t ResolveFunction(void* raw_context, uint64_t target_address,
+                         uint64_t host_return_address);
+
+void ForwardMMIOAccessForRecording(void* context, void* hostaddr) {
+  reinterpret_cast<A64Backend*>(context)
+      ->RecordMMIOExceptionForGuestInstruction(hostaddr);
+}
 
 // ==========================================================================
 // A64HelperEmitter — generates thunks using xbyak_aarch64.
@@ -217,8 +225,9 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
   //   q28, q29     sp + 0x100
   //   q30, q31     sp + 0x120
   //   x29, x30     sp + 0x140
-  //   Total: 0x150 = 336 bytes (16-byte aligned)
-  const size_t g2h_stack = 336;
+  //   x20, x21     sp + 0x150
+  //   Total: 0x160 = 352 bytes (16-byte aligned)
+  const size_t g2h_stack = 352;
   sub(sp, sp, static_cast<uint32_t>(g2h_stack));
   code_offsets.prolog_stack_alloc = getSize();
 
@@ -235,6 +244,8 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
   stp(Xbyak_aarch64::QReg(30), Xbyak_aarch64::QReg(31), ptr(sp, 0x120));
   // Save x29/x30 (FP/LR).
   stp(x29, x30, ptr(sp, 0x140));
+  // Some host callbacks don't preserve our reserved guest-state registers.
+  stp(x20, x21, ptr(sp, 0x150));
 
   code_offsets.body = getSize();
 
@@ -245,6 +256,12 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
   // x1, x2, x3 already hold args from the caller.
   blr(x9);
 
+  // Restore the reserved guest-state registers explicitly rather than relying
+  // on every host callback to honor AAPCS64 callee-save rules.
+  ldp(x20, x21, ptr(sp, 0x150));
+  // Reload membase in case the host callback clobbered x21.
+  ldr(x21, ptr(x20, static_cast<int32_t>(
+                        offsetof(ppc::PPCContext, virtual_membase))));
   // Host callbacks may change FPCR. Restore the guest scalar FPCR before
   // resuming the JIT so later guest ops observe the cached PPC mode.
   sub(x10, x20, static_cast<uint32_t>(sizeof(A64BackendContext)));
@@ -294,7 +311,7 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
 // We call ResolveFunction to compile/lookup the target, then jump to it.
 //
 // On entry from the indirection table:
-//   w16 = guest PPC address (loaded by the call sequence)
+//   w17 = guest PPC address (preserved by the call sequence)
 //   x20 = context
 //   x30 = return address (from the BLR that got us here)
 ResolveFunctionThunk A64HelperEmitter::EmitResolveFunctionThunk() {
@@ -319,14 +336,20 @@ ResolveFunctionThunk A64HelperEmitter::EmitResolveFunctionThunk() {
 
   code_offsets.body = getSize();
 
-  // Call ResolveFunction(context, target_address).
+  // Call ResolveFunction(context, target_address, host_return_address).
+  stp(x20, x21, ptr(sp, 0x10));
   mov(x0, x20);  // x0 = PPCContext*
-  mov(x1, x16);  // x1 = guest address (32-bit in w16)
+  mov(w1, w17);  // x1 = guest address (32-bit in w17)
+  mov(x2, x30);  // x2 = host return address after the call site
   // Load address of ResolveFunction.
   mov(x9, reinterpret_cast<uint64_t>(&ResolveFunction));
   blr(x9);
   // x0 now holds the resolved host machine code address.
   mov(x9, x0);
+  ldp(x20, x21, ptr(sp, 0x10));
+  // Reload membase in case ResolveFunction clobbered x21.
+  ldr(x21, ptr(x20, static_cast<int32_t>(
+                        offsetof(ppc::PPCContext, virtual_membase))));
 
   code_offsets.epilog = getSize();
 
@@ -337,7 +360,7 @@ ResolveFunctionThunk A64HelperEmitter::EmitResolveFunctionThunk() {
 
   cbz(x9, 8);  // skip br x9 if null, fall through to brk
   br(x9);      // Jump to the resolved function (tail call — preserves LR).
-  brk(0xF0);   // Resolution failed — trap for debugging.
+  brk(0xF0);   // Resolution failed.
 
   code_offsets.tail = getSize();
 
@@ -467,19 +490,135 @@ void* A64HelperEmitter::EmitGuestAndHostSynchronizeStackHelper() {
 // ==========================================================================
 // ResolveFunction — runtime function resolution.
 // ==========================================================================
-uint64_t ResolveFunction(void* raw_context, uint64_t target_address) {
+uint64_t ResolveFunction(void* raw_context, uint64_t target_address,
+                         uint64_t host_return_address) {
   auto guest_context = reinterpret_cast<ppc::PPCContext*>(raw_context);
+  assert_not_null(guest_context);
   auto thread_state = guest_context->thread_state;
+  assert_not_null(thread_state);
   assert_not_zero(target_address);
 
-  auto fn = thread_state->processor()->ResolveFunction(
-      static_cast<uint32_t>(target_address));
-  if (!fn) {
-    // Unresolvable — return 0 which will fault.
+  uint32_t guest_address = 0;
+  if (target_address > 0xFFFFFFFFu) {
+    const auto ctx_ptr = reinterpret_cast<uint64_t>(guest_context);
+    if (target_address >= ctx_ptr &&
+        target_address < ctx_ptr + sizeof(ppc::PPCContext)) {
+      XELOGE(
+          "ResolveFunction: target_address 0x{:016X} is within PPCContext "
+          "[0x{:016X}, 0x{:016X})",
+          target_address, ctx_ptr, ctx_ptr + sizeof(ppc::PPCContext));
+      XELOGE(
+          "ResolveFunction: The target register contains a context pointer "
+          "instead of a function address");
+      return 0;
+    }
+
+    auto* code_cache = static_cast<A64CodeCache*>(
+        thread_state->processor()->backend()->code_cache());
+    auto* guest_function = code_cache->LookupFunction(target_address);
+    if (guest_function) {
+      guest_address =
+          guest_function->MapMachineCodeToGuestAddress(target_address);
+    } else {
+      guest_address = static_cast<uint32_t>(target_address);
+    }
+  } else {
+    guest_address = static_cast<uint32_t>(target_address);
+  }
+
+  if (!guest_address) {
+    XELOGE("ResolveFunction: guest_address is 0");
     return 0;
   }
 
-  auto guest_fn = static_cast<GuestFunction*>(fn);
+  if (cvars::a64_enable_host_guest_stack_synchronization &&
+      target_address <= 0xFFFFFFFFu) {
+    auto* processor = thread_state->processor();
+    auto* module_for_address =
+        processor->LookupModule(static_cast<uint32_t>(target_address));
+    if (module_for_address) {
+      auto* xexmod = dynamic_cast<XexModule*>(module_for_address);
+      if (xexmod) {
+        auto* flags = xexmod->GetInstructionAddressFlags(
+            static_cast<uint32_t>(target_address));
+        if (flags && flags->is_return_site) {
+          auto ones_with_address = processor->FindFunctionsWithAddress(
+              static_cast<uint32_t>(target_address));
+          if (!ones_with_address.empty()) {
+            A64Function* candidate = nullptr;
+            uintptr_t host_address = 0;
+            for (auto* entry : ones_with_address) {
+              auto* afunc = static_cast<A64Function*>(entry);
+              host_address = afunc->MapGuestAddressToMachineCode(
+                  static_cast<uint32_t>(target_address));
+              if (host_address &&
+                  afunc->machine_code() !=
+                      reinterpret_cast<const uint8_t*>(host_address)) {
+                candidate = afunc;
+                break;
+              }
+            }
+
+            if (candidate && host_address) {
+              auto* backend = static_cast<A64Backend*>(processor->backend());
+              auto* backend_context =
+                  backend->BackendContextForGuestContext(guest_context);
+              if (backend_context->stackpoints &&
+                  backend_context->current_stackpoint_depth > 0) {
+                uint32_t current_stackpoint_index =
+                    backend_context->current_stackpoint_depth - 1;
+                const uint32_t current_guest_stackpointer =
+                    static_cast<uint32_t>(guest_context->r[1]);
+                uint32_t num_frames_bigger = 0;
+
+                while (current_stackpoint_index != 0xFFFFFFFFu) {
+                  if (current_guest_stackpointer >
+                      backend_context->stackpoints[current_stackpoint_index]
+                          .guest_stack_) {
+                    --current_stackpoint_index;
+                    ++num_frames_bigger;
+                  } else {
+                    break;
+                  }
+                }
+
+                if (num_frames_bigger > 1 &&
+                    current_stackpoint_index != 0xFFFFFFFFu) {
+                  const uint32_t guest_lr =
+                      static_cast<uint32_t>(guest_context->lr);
+                  uint32_t scan_index = current_stackpoint_index;
+                  while (scan_index != 0xFFFFFFFFu) {
+                    const auto& sp_entry =
+                        backend_context->stackpoints[scan_index];
+                    if (sp_entry.guest_stack_ != current_guest_stackpointer) {
+                      break;
+                    }
+                    if (sp_entry.guest_return_address_ == guest_lr) {
+                      current_stackpoint_index = scan_index;
+                      break;
+                    }
+                    if (!scan_index) {
+                      break;
+                    }
+                    --scan_index;
+                  }
+
+                  return host_address;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  auto fn = thread_state->processor()->ResolveFunction(guest_address);
+  if (!fn) {
+    return 0;
+  }
+
+  auto* guest_fn = static_cast<A64Function*>(fn);
   auto code = guest_fn->machine_code();
   if (!code) {
     return 0;
@@ -634,6 +773,10 @@ bool A64Backend::Initialize(Processor* processor) {
 
   // Register exception handler for MMIO access from JIT code.
   ExceptionHandler::Install(ExceptionCallbackThunk, this);
+  if (cvars::record_mmio_access_exceptions) {
+    processor->memory()->SetMMIOExceptionRecordingCallback(
+        ForwardMMIOAccessForRecording, this);
+  }
 
   return true;
 }
@@ -856,7 +999,11 @@ void A64Backend::RecordMMIOExceptionForGuestInstruction(void* host_address) {
         cpu::InfoCacheFlags* icf =
             xex_guest_module->GetInstructionAddressFlags(guestaddr);
         if (icf) {
+          const bool was_mmio = icf->accessed_mmio;
           icf->accessed_mmio = true;
+          if (!was_mmio) {
+            xex_guest_module->FlushInfoCache();
+          }
         }
       }
     }
@@ -873,7 +1020,6 @@ bool A64Backend::ExceptionCallback(Exception* ex) {
     return false;
   }
 
-  // Verify it's our BRK #0 instruction.
   auto instruction_bytes =
       xe::load<uint32_t>(reinterpret_cast<void*>(ex->pc()));
   if (instruction_bytes != kArm64Brk0) {
