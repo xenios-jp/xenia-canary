@@ -592,7 +592,8 @@ struct VECTOR_COMPARE_UGT_V128
         break;
       case FLOAT32_TYPE:
         // Unsigned FP compare = ordered GT.
-        e.fcmgt(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
+        EmitWithVmxFpcr(e,
+                        [&] { e.fcmgt(VReg(d).s4, VReg(s1).s4, VReg(s2).s4); });
         break;
       default:
         assert_unhandled_case(i.instr->flags);
@@ -623,7 +624,8 @@ struct VECTOR_COMPARE_UGE_V128
         e.cmhs(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
         break;
       case FLOAT32_TYPE:
-        e.fcmge(VReg(d).s4, VReg(s1).s4, VReg(s2).s4);
+        EmitWithVmxFpcr(e,
+                        [&] { e.fcmge(VReg(d).s4, VReg(s1).s4, VReg(s2).s4); });
         break;
       default:
         assert_unhandled_case(i.instr->flags);
