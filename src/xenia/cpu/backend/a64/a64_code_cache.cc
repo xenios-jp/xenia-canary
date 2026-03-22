@@ -16,6 +16,7 @@
 #include "xenia/base/platform_win.h"
 #endif
 #include "xenia/base/assert.h"
+#include "xenia/base/clock.h"
 #include "xenia/base/literals.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -72,10 +73,58 @@ bool A64CodeCache::InitializeEncodedIndirectionTable() {
 
 bool A64CodeCache::Initialize() {
 #if XE_A64_INDIRECTION_64BIT
-  if (!CodeCacheBase<A64CodeCache>::Initialize()) {
+  if (!InitializeEncodedIndirectionTable()) {
     return false;
   }
-  return InitializeEncodedIndirectionTableState();
+
+  file_name_ = fmt::format("xenia_code_cache_{}", Clock::QueryHostTickCount());
+  mapping_ = xe::memory::CreateFileMappingHandle(
+      file_name_, kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadWrite,
+      false);
+  if (mapping_ == xe::memory::kFileMappingHandleInvalid) {
+    XELOGE("Unable to create code cache mmap");
+    return false;
+  }
+
+  if (xe::memory::IsWritableExecutableMemoryPreferred()) {
+    generated_code_execute_base_ =
+        reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+            mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
+            kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadWrite, 0));
+    generated_code_write_base_ = generated_code_execute_base_;
+    if (!generated_code_execute_base_ || !generated_code_write_base_) {
+      XELOGE("Unable to allocate code cache generated code storage");
+      XELOGE(
+          "This is likely because the {:X}-{:X} range is in use by some "
+          "other system DLL",
+          uint64_t(kGeneratedCodeExecuteBase),
+          uint64_t(kGeneratedCodeExecuteBase + kGeneratedCodeSize));
+      return false;
+    }
+  } else {
+    generated_code_execute_base_ =
+        reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+            mapping_, reinterpret_cast<void*>(kGeneratedCodeExecuteBase),
+            kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadOnly, 0));
+    generated_code_write_base_ =
+        reinterpret_cast<uint8_t*>(xe::memory::MapFileView(
+            mapping_, reinterpret_cast<void*>(kGeneratedCodeWriteBase),
+            kGeneratedCodeSize, xe::memory::PageAccess::kReadWrite, 0));
+    if (!generated_code_execute_base_ || !generated_code_write_base_) {
+      XELOGE("Unable to allocate code cache generated code storage");
+      XELOGE(
+          "This is likely because the {:X}-{:X} and {:X}-{:X} ranges are "
+          "in use by some other system DLL",
+          uint64_t(kGeneratedCodeExecuteBase),
+          uint64_t(kGeneratedCodeExecuteBase + kGeneratedCodeSize),
+          uint64_t(kGeneratedCodeWriteBase),
+          uint64_t(kGeneratedCodeWriteBase + kGeneratedCodeSize));
+      return false;
+    }
+  }
+
+  generated_code_map_.reserve(kMaximumFunctionCount);
+  return true;
 #else
   return CodeCacheBase<A64CodeCache>::Initialize();
 #endif
@@ -239,6 +288,9 @@ void A64CodeCache::PlaceGuestCode(uint32_t guest_address, void* machine_code,
         static_cast<size_t>(end_execute_address - tail_execute_address));
   }
 
+  OnCodePlaced(guest_address, function_info, code_execute_address,
+               func_info.code_size.total);
+
   if (guest_address && indirection_table_base_) {
     PublishIndirection(guest_address,
                        reinterpret_cast<uint64_t>(code_execute_address));
@@ -328,11 +380,50 @@ void A64CodeCache::PublishIndirection(uint32_t guest_address,
   }
   auto* slot =
       reinterpret_cast<uint32_t*>(indirection_table_base_ + guest_offset);
-  *slot = EncodeIndirectionTarget(host_address);
+  std::atomic_ref<uint32_t> slot_ref(*slot);
+  uint32_t encoded_target = 0;
+
+  const uintptr_t code_base = execute_base_address();
+  const uintptr_t code_end = code_base + kGeneratedCodeSize;
+  if (host_address >= code_base && host_address < code_end) {
+    encoded_target = static_cast<uint32_t>(host_address - code_base);
+  } else {
+    if (!external_indirection_targets_) {
+      XELOGE("ARM64 external indirection table is unavailable");
+      return;
+    }
+
+    std::lock_guard<std::mutex> lock(external_indirection_mutex_);
+    const uint32_t current_slot = slot_ref.load(std::memory_order_relaxed);
+    const uint32_t current_count =
+        external_indirection_target_count_.load(std::memory_order_relaxed);
+    uint32_t target_index = kIndirectionExternalIndexMask;
+    if ((current_slot & kIndirectionExternalTag) != 0) {
+      const uint32_t current_index =
+          current_slot & kIndirectionExternalIndexMask;
+      if (current_index < current_count) {
+        target_index = current_index;
+      }
+    }
+    if (target_index == kIndirectionExternalIndexMask) {
+      if (current_count >= kIndirectionExternalCapacity) {
+        XELOGE("ARM64 external indirection table overflow");
+        return;
+      }
+      target_index = current_count;
+      external_indirection_target_count_.store(target_index + 1,
+                                               std::memory_order_relaxed);
+    }
+    external_indirection_targets_[target_index] = host_address;
+    encoded_target = kIndirectionExternalTag | target_index;
+  }
+
+  slot_ref.store(encoded_target, std::memory_order_release);
 #else
   auto* slot = reinterpret_cast<uint32_t*>(
       indirection_table_base_ + (guest_address - kIndirectionTableBase));
-  *slot = static_cast<uint32_t>(host_address);
+  std::atomic_ref<uint32_t>(*slot).store(static_cast<uint32_t>(host_address),
+                                         std::memory_order_release);
 #endif
 }
 

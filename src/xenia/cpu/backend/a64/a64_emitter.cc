@@ -373,6 +373,7 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
     mov(x9, code_cache_->indirection_table_base_bias());
     add(x9, x9, w17, UXTW);
     ldr(w16, ptr(x9, static_cast<uint32_t>(0)));
+    dmb(Xbyak_aarch64::ISH);
     tbnz(w16, 31, external_target);
     mov(w15, w16);
     mov(x9, code_cache_->execute_base_address());
@@ -446,6 +447,7 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
     mov(x9, code_cache_->indirection_table_base_bias());
     add(x9, x9, w17, UXTW);
     ldr(w16, ptr(x9, static_cast<uint32_t>(0)));
+    dmb(Xbyak_aarch64::ISH);
     tbnz(w16, 31, external_target);
     mov(w15, w16);
     mov(x9, code_cache_->execute_base_address());

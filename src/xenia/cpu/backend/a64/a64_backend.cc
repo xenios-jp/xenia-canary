@@ -350,6 +350,13 @@ ResolveFunctionThunk A64HelperEmitter::EmitResolveFunctionThunk() {
   // Reload membase in case ResolveFunction clobbered x21.
   ldr(x21, ptr(x20, static_cast<int32_t>(
                         offsetof(ppc::PPCContext, virtual_membase))));
+  // ResolveFunction may call back into host code and leave FPCR in host mode.
+  // Restore the cached guest scalar FPCR before tail-jumping back into JIT
+  // code.
+  sub(x10, x20, static_cast<uint32_t>(sizeof(A64BackendContext)));
+  ldr(w11,
+      ptr(x10, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
+  msr(3, 3, 4, 4, 0, x11);
 
   code_offsets.epilog = getSize();
 
