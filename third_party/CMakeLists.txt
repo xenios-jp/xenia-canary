@@ -398,6 +398,117 @@ if(APPLE)
 endif()
 
 # ==============================================================================
+# Metal Shader Converter and dxilconv (Apple only)
+# ==============================================================================
+if(APPLE)
+  set(_xe_metal_shader_converter_root
+      "${CMAKE_CURRENT_SOURCE_DIR}/metal-shader-converter")
+  set(_xe_metal_shader_converter_dylib
+      "${_xe_metal_shader_converter_root}/lib/libmetalirconverter.dylib")
+  if(NOT EXISTS "${_xe_metal_shader_converter_dylib}")
+    message(FATAL_ERROR
+      "Metal Shader Converter dylib not found at "
+      "${_xe_metal_shader_converter_dylib}.")
+  endif()
+
+  add_library(xenia-third-party-metal-shader-converter SHARED IMPORTED GLOBAL)
+  set_target_properties(xenia-third-party-metal-shader-converter PROPERTIES
+    IMPORTED_CONFIGURATIONS "Release"
+    IMPORTED_LOCATION "${_xe_metal_shader_converter_dylib}"
+    IMPORTED_LOCATION_RELEASE "${_xe_metal_shader_converter_dylib}"
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${_xe_metal_shader_converter_root}/include;${_xe_metal_shader_converter_root}/include/metal_irconverter;${_xe_metal_shader_converter_root}/include/metal_irconverter_runtime"
+    INTERFACE_COMPILE_DEFINITIONS
+      "METAL_SHADER_CONVERTER_AVAILABLE;IR_RUNTIME_METALCPP")
+
+  set(_xe_dxilconv_root
+      "${CMAKE_CURRENT_SOURCE_DIR}/DirectXShaderCompiler")
+  set(_xe_dxilconv_headers_root
+      "${CMAKE_CURRENT_SOURCE_DIR}/DirectX-Headers/include")
+  if(XE_TARGET_X86_64)
+    set(_xe_dxilconv_build_dir
+        "${_xe_dxilconv_root}/build_dxilconv_macos_x86_64")
+    set(_xe_dxilconv_arch "x86_64")
+    set(_xe_dxilconv_triple "x86_64-apple-darwin")
+  else()
+    set(_xe_dxilconv_build_dir "${_xe_dxilconv_root}/build_dxilconv_macos")
+    set(_xe_dxilconv_arch "arm64")
+    set(_xe_dxilconv_triple "arm64-apple-darwin")
+  endif()
+  set(_xe_dxilconv_dylib "${_xe_dxilconv_build_dir}/lib/libdxilconv.dylib")
+  set(_xe_dxbc2dxil_bin "${_xe_dxilconv_build_dir}/bin/dxbc2dxil")
+
+  add_custom_command(
+    OUTPUT "${_xe_dxilconv_dylib}" "${_xe_dxbc2dxil_bin}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${_xe_dxilconv_build_dir}"
+    COMMAND "${CMAKE_COMMAND}"
+            -S "${_xe_dxilconv_root}"
+            -B "${_xe_dxilconv_build_dir}"
+            "-DD3D12_INCLUDE_DIR=${_xe_dxilconv_headers_root}/directx"
+            "-DDXGI_INCLUDE_DIR=${_xe_dxilconv_headers_root}/directx"
+            "-DWSL_INCLUDE_DIR=${_xe_dxilconv_headers_root}/wsl"
+            -DCMAKE_BUILD_TYPE=Release
+            "-DCMAKE_OSX_ARCHITECTURES=${_xe_dxilconv_arch}"
+            "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+            -DLLVM_TARGETS_TO_BUILD=None
+            -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=
+            "-DLLVM_DEFAULT_TARGET_TRIPLE=${_xe_dxilconv_triple}"
+            -DLLVM_ENABLE_THREADS=ON
+            -DLLVM_ENABLE_PIC=ON
+            -DLLVM_BUILD_32_BITS=OFF
+            -DBUILD_SHARED_LIBS=OFF
+            -DLLVM_OPTIMIZED_TABLEGEN=ON
+            -DLLVM_USE_INTEL_JITEVENTS=OFF
+            -DLLVM_ENABLE_ZLIB=ON
+            -DLLVM_ENABLE_LIBXML2=OFF
+            -DCLANG_BUILD_EXAMPLES=OFF
+            -DLLVM_INCLUDE_TESTS=OFF
+            -DLLVM_INCLUDE_EXAMPLES=OFF
+            -DLLVM_INCLUDE_DOCS=OFF
+            -DCLANG_INCLUDE_TESTS=OFF
+            -DHLSL_INCLUDE_TESTS=OFF
+            -DENABLE_SPIRV_CODEGEN=OFF
+            -DSPIRV_BUILD_TESTS=OFF
+            -DCLANG_ENABLE_STATIC_ANALYZER=OFF
+            -DCLANG_ENABLE_ARCMT=OFF
+            -DLLVM_ENABLE_BINDINGS=OFF
+            -DLLVM_ENABLE_EH=ON
+            -DLLVM_ENABLE_RTTI=ON
+            -DLLVM_REQUIRES_EH=ON
+            -DLLVM_REQUIRES_RTTI=ON
+            -DCMAKE_C_COMPILER=clang
+            -DCMAKE_CXX_COMPILER=clang++
+            -DCMAKE_CXX_STANDARD=17
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON
+            -DCMAKE_CXX_EXTENSIONS=OFF
+            "-DCMAKE_C_FLAGS="
+            "-DCMAKE_CXX_FLAGS=-stdlib=libc++ -Wno-unknown-warning-option -Wno-deprecated-declarations -Wno-deprecated -Wno-deprecated-literal-operator -Wno-invalid-specialization -Wno-nontrivial-memcall"
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+    COMMAND "${CMAKE_COMMAND}" --build "${_xe_dxilconv_build_dir}"
+            --target dxilconv --config Release --parallel
+    COMMAND "${CMAKE_COMMAND}" --build "${_xe_dxilconv_build_dir}"
+            --target dxbc2dxil --config Release --parallel
+    DEPENDS
+      "${_xe_dxilconv_root}/projects/dxilconv/include/DxbcConverter.h"
+      "${_xe_dxilconv_root}/projects/dxilconv/tools/dxilconv/dxilconv_unix.cpp"
+      "${_xe_dxilconv_root}/projects/dxilconv/tools/dxbc2dxil/dxbc2dxil_unix.cpp"
+    COMMENT "Building dxilconv for Metal shader conversion"
+    VERBATIM)
+  add_custom_target(xenia-third-party-dxilconv-build
+    DEPENDS "${_xe_dxilconv_dylib}" "${_xe_dxbc2dxil_bin}")
+
+  add_library(xenia-third-party-dxilconv SHARED IMPORTED GLOBAL)
+  add_dependencies(xenia-third-party-dxilconv xenia-third-party-dxilconv-build)
+  set_target_properties(xenia-third-party-dxilconv PROPERTIES
+    IMPORTED_CONFIGURATIONS "Release"
+    IMPORTED_LOCATION "${_xe_dxilconv_dylib}"
+    IMPORTED_LOCATION_RELEASE "${_xe_dxilconv_dylib}"
+    INTERFACE_INCLUDE_DIRECTORIES
+      "${_xe_dxilconv_root}/include;${_xe_dxilconv_root}/projects/dxilconv/include")
+endif()
+
+# ==============================================================================
 # xenia-shader-cc (build-time host tool: GLSL/XeSL -> SPIR-V -> .h, and on
 # Apple, XeSL -> MSL metallib -> .h via xcrun metal)
 # ==============================================================================
