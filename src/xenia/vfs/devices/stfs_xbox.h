@@ -373,8 +373,9 @@ struct XContentMetadata {
         language == XLanguage::kInvalid ? 1 : uint32_t(language) - 1;
 
     if (lang_id >= kNumLanguagesV2) {
-      assert_always();
-      // no room for this lang, read from english slot..
+      // No slot for this language. Callers probe languages best-effort to find
+      // a localized string, so an absent language is expected here, not
+      // corruption -- fall back to the English slot.
       lang_id = uint32_t(XLanguage::kEnglish) - 1;
     }
 
@@ -387,8 +388,8 @@ struct XContentMetadata {
     }
 
     if (!str) {
-      // Invalid language ID?
-      assert_always();
+      // No string stored for this language; expected during best-effort
+      // localized-string probing, so return empty rather than asserting.
       return u"";
     }
 
@@ -399,8 +400,9 @@ struct XContentMetadata {
     uint32_t lang_id = uint32_t(language) - 1;
 
     if (lang_id >= kNumLanguagesV2) {
-      assert_always();
-      // no room for this lang, read from english slot..
+      // No slot for this language. Callers probe languages best-effort to find
+      // a localized string, so an absent language is expected here, not
+      // corruption -- fall back to the English slot.
       lang_id = uint32_t(XLanguage::kEnglish) - 1;
     }
 
@@ -413,8 +415,8 @@ struct XContentMetadata {
     }
 
     if (!str) {
-      // Invalid language ID?
-      assert_always();
+      // No string stored for this language; expected during best-effort
+      // localized-string probing, so return empty rather than asserting.
       return u"";
     }
 
