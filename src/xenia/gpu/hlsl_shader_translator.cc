@@ -26,10 +26,11 @@ namespace gpu {
 
 HlslShaderTranslator::HlslShaderTranslator(
     ui::GraphicsProvider::GpuVendorID vendor_id, bool bindless_resources_used,
-    bool edram_rov_used, bool /*use_shader_model_6_6*/)
+    bool edram_rov_used, bool use_shader_model_6_6)
     : vendor_id_(vendor_id),
       bindless_resources_used_(bindless_resources_used),
-      edram_rov_used_(edram_rov_used) {}
+      edram_rov_used_(edram_rov_used),
+      use_shader_model_6_6_(use_shader_model_6_6) {}
 
 HlslShaderTranslator::~HlslShaderTranslator() = default;
 
@@ -161,11 +162,8 @@ void HlslShaderTranslator::PostTranslation() {
   // Copy bindings to the DxbcShader object (D3D12 uses DxbcShader for all
   // shaders, even when using HLSL/DXIL).
   DxbcShader* dxbc_shader = dynamic_cast<DxbcShader*>(&translation.shader());
-  XELOGI("HLSL PostTranslation: dxbc_shader={}, tex_bindings={}, smp_bindings={}",
-         dxbc_shader != nullptr, texture_bindings_.size(), sampler_bindings_.size());
   if (dxbc_shader && !dxbc_shader->bindings_setup_entered_.test_and_set(
                          std::memory_order_relaxed)) {
-    XELOGI("HLSL PostTranslation: Setting up bindings (flag was not set)");
     dxbc_shader->texture_bindings_.clear();
     dxbc_shader->texture_bindings_.reserve(texture_bindings_.size());
     dxbc_shader->used_texture_mask_ = 0;
@@ -195,11 +193,6 @@ void HlslShaderTranslator::PostTranslation() {
       shader_binding.mip_filter = translator_binding.mip_filter;
       shader_binding.aniso_filter = translator_binding.aniso_filter;
     }
-    XELOGI("HLSL PostTranslation: Done - shader now has {} tex, {} smp bindings",
-           dxbc_shader->texture_bindings_.size(), dxbc_shader->sampler_bindings_.size());
-  } else if (dxbc_shader) {
-    XELOGI("HLSL PostTranslation: Flag already set, skipping. Shader has {} tex, {} smp",
-           dxbc_shader->texture_bindings_.size(), dxbc_shader->sampler_bindings_.size());
   }
 }
 
@@ -717,10 +710,10 @@ void HlslShaderTranslator::EmitHelperFunctions() {
 
   // Bindless resource helper functions.
   if (bindless_resources_used_) {
-    // Offset for texture SRVs in the view heap. The descriptor indices buffer
-    // stores relative indices; we need absolute heap indices for SM 6.6.
-    // This must match D3D12CommandProcessor::SystemBindlessView::kUnboundedSRVsStart.
-    EmitLine("static const uint kXeUnboundedSRVsStart = 20u;");
+    // Metal binds ResourceDescriptorHeap directly to XeniaViewBindlessHeap.
+    // Unlike D3D12, this heap doesn't reserve system descriptors before guest
+    // texture SRVs.
+    EmitLine("static const uint kXeResourceDescriptorHeapStart = 0u;");
     EmitLine("");
 
     // Helper to get descriptor index from the descriptor indices constant buffer.
@@ -747,6 +740,12 @@ void HlslShaderTranslator::EmitEntryPointBegin() {
   // Declare output variable.
   if (is_vertex_shader()) {
     EmitLine("VSOutput output = (VSOutput)0;");
+    Modification modification = GetHlslShaderModification();
+    if (modification.vertex.output_point_size) {
+      // Negative X means the point-list expansion shader should use the
+      // constant point size unless the guest shader overwrites it.
+      EmitLine("output.xe_point_parameters = float3(-1.0, 0.0, 0.0);");
+    }
   } else {
     EmitLine("PSOutput output = (PSOutput)0;");
   }
@@ -1824,8 +1823,8 @@ void HlslShaderTranslator::ProcessTextureFetchInstruction(
   if (bindless_resources_used_) {
     // Bindless mode: Get descriptor indices from the constant buffer.
     // The indices are stored at the binding's bindless_descriptor_index.
-    // Texture indices are relative to kUnboundedSRVsStart, so we add the offset
-    // to get absolute heap indices for SM 6.6 ResourceDescriptorHeap.
+    // Metal binds the SM 6.6 ResourceDescriptorHeap to the guest view heap
+    // directly, so descriptor indices already map to heap entries.
     uint32_t tex_desc_idx =
         texture_bindings_[texture_binding_index].bindless_descriptor_index;
     uint32_t smp_desc_idx =
@@ -1833,7 +1832,8 @@ void HlslShaderTranslator::ProcessTextureFetchInstruction(
     EmitLine("// Bindless texture fetch - fetch constant " +
              std::to_string(fetch_constant_index));
     EmitLine("uint xe_tf_tex_idx = XeGetDescriptorIndex(" +
-             std::to_string(tex_desc_idx) + "u) + kXeUnboundedSRVsStart;");
+             std::to_string(tex_desc_idx) +
+             "u) + kXeResourceDescriptorHeapStart;");
     EmitLine("uint xe_tf_smp_idx = XeGetDescriptorIndex(" +
              std::to_string(smp_desc_idx) + "u);");
   }
@@ -1876,7 +1876,7 @@ void HlslShaderTranslator::ProcessTextureFetchInstruction(
           EmitLine(
               "SamplerState xe_tf_smp = SamplerDescriptorHeap[xe_tf_smp_idx];");
           EmitLine("float3 xe_tf_uvl = float3(xe_tf_uv, 0.0);");
-          if (instr.attributes.use_register_lod) {
+          if (instr.attributes.use_register_lod || is_vertex_shader()) {
             EmitLine("float4 xe_tf_result = xe_tf_tex.SampleLevel("
                      "xe_tf_smp, xe_tf_uvl, " +
                      std::to_string(instr.attributes.lod_bias) + ");");
@@ -1898,7 +1898,7 @@ void HlslShaderTranslator::ProcessTextureFetchInstruction(
           // Bindful: Use static texture names.
           std::string tex_name = "xe_texture2d_" + std::to_string(fetch_constant_index);
           std::string sampler_name = "xe_sampler_" + std::to_string(fetch_constant_index);
-          if (instr.attributes.use_register_lod) {
+          if (instr.attributes.use_register_lod || is_vertex_shader()) {
             EmitLine("float4 xe_tf_result = " + tex_name + ".SampleLevel(" +
                      sampler_name + ", xe_tf_uv, " +
                      std::to_string(instr.attributes.lod_bias) + ");");

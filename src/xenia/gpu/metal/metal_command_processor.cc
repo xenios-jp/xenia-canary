@@ -2888,7 +2888,7 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   }
 
   if (use_tessellation_emulation || use_geometry_emulation) {
-    if (!pipeline_cache_->EnsureDxbcTranslationReady(vertex_translation,
+    if (!pipeline_cache_->EnsureDxilTranslationReady(vertex_translation,
                                                      "vertex")) {
       return false;
     }

@@ -17,9 +17,8 @@ namespace xe {
 namespace gpu {
 namespace metal {
 
-// Metal-local cache of generated DXBC geometry shaders (the shared generator in
-// xenia/gpu/dxbc_geometry_shader.cc produces the bytes; Metal converts them via
-// the Metal Shader Converter at consumption time).
+// Metal-local cache of generated DXBC geometry shaders for the legacy fallback
+// path. The metal_dxil geometry path generates HLSL directly instead.
 static std::unordered_map<GeometryShaderKey, std::vector<uint32_t>,
                           GeometryShaderKey::Hasher>
     geometry_shaders_;

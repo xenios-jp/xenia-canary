@@ -203,7 +203,11 @@ void* MetalShaderConverter::CreateXbox360RootSignature(
   desc.pParameters = params;
   desc.NumStaticSamplers = 0;
   desc.pStaticSamplers = nullptr;
-  desc.Flags = IRRootSignatureFlagNone;
+  desc.Flags = bindless_resources_used
+                   ? static_cast<IRRootSignatureFlags>(
+                         IRRootSignatureFlagCBVSRVUAVHeapDirectlyIndexed |
+                         IRRootSignatureFlagSamplerHeapDirectlyIndexed)
+                   : IRRootSignatureFlagNone;
 
   IRVersionedRootSignatureDescriptor versionedDesc = {};
   versionedDesc.version = IRRootSignatureVersion_1_1;

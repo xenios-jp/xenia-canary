@@ -223,15 +223,9 @@ class MetalPipelineCache {
       const PipelineAttachmentFormats& attachment_formats,
       const PipelineRenderingKey& rendering_key);
 
-  // Ensure the shared DXBC translator has produced DXBC bytecode.
-  bool EnsureDxbcTranslationReady(MetalShader::MetalTranslation* translation,
-                                  const char* stage_name);
   bool EnsureDxilTranslationReady(MetalShader::MetalTranslation* translation,
                                   const char* stage_name);
   bool EnsureMetalTranslationReady(MetalShader::MetalTranslation* translation);
-  // Experimental HLSL -> DXC(-metal) -> metallib path (gated by metal_dxil).
-  bool EnsureMetalTranslationReadyHlsl(
-      MetalShader::MetalTranslation* translation);
 
   // Ensure the depth-only pixel shader is compiled and ready.
   bool EnsureDepthOnlyPixelShader();
@@ -298,8 +292,8 @@ class MetalPipelineCache {
   std::unique_ptr<DxbcShaderTranslator> shader_translator_;
   std::unique_ptr<DxbcToDxilConverter> dxbc_to_dxil_converter_;
   std::unique_ptr<MetalShaderConverter> metal_shader_converter_;
-  // Experimental HLSL -> DXC(-metal) path, created only when cvar metal_dxil is
-  // set and a Metal-capable dxcompiler initializes.
+  // Experimental HLSL -> DXIL path, created only when cvar metal_dxil is set
+  // and dxcompiler initializes.
   std::unique_ptr<HlslShaderTranslator> hlsl_translator_;
   std::unique_ptr<DxcCompiler> dxc_compiler_;
   std::mutex shader_translation_mutex_;
