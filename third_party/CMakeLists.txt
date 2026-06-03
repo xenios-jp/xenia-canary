@@ -495,11 +495,21 @@ if(APPLE)
       "${_xe_dxilconv_root}/projects/dxilconv/tools/dxbc2dxil/dxbc2dxil_unix.cpp"
     COMMENT "Building dxilconv for Metal shader conversion"
     VERBATIM)
-  add_custom_target(xenia-third-party-dxilconv-build
-    DEPENDS "${_xe_dxilconv_dylib}" "${_xe_dxbc2dxil_bin}")
+  # Consume a prebuilt libdxilconv.dylib rather than rebuilding it from source.
+  # The upstream (microsoft) DXC submodule this worktree pins for DXC's -metal
+  # path does not carry the dxilconv-macos fork's build shims, so dxilconv can't
+  # be rebuilt here. We package the prebuilt dylib (built once from the fork) at
+  # the path below; the add_custom_command above is left unreferenced (CMake
+  # drops it as nothing consumes its output) and IMPORTED_LOCATION points
+  # straight at the prebuilt.
+  if(NOT EXISTS "${_xe_dxilconv_dylib}")
+    message(FATAL_ERROR
+      "Prebuilt libdxilconv not found at ${_xe_dxilconv_dylib}. Copy it from "
+      "another worktree's build_dxilconv_macos; this worktree does not rebuild "
+      "dxilconv.")
+  endif()
 
   add_library(xenia-third-party-dxilconv SHARED IMPORTED GLOBAL)
-  add_dependencies(xenia-third-party-dxilconv xenia-third-party-dxilconv-build)
   set_target_properties(xenia-third-party-dxilconv PROPERTIES
     IMPORTED_CONFIGURATIONS "Release"
     IMPORTED_LOCATION "${_xe_dxilconv_dylib}"
