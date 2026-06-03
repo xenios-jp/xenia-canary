@@ -65,25 +65,25 @@ void LogUnimplementedMemExportResult(const char* operation,
       result.GetUsedWriteMask());
 }
 
-bool IsVectorKillOpcode(AluVectorOpcode opcode) {
+bool IsVectorKillOpcode(ucode::AluVectorOpcode opcode) {
   switch (opcode) {
-    case AluVectorOpcode::kKillEq:
-    case AluVectorOpcode::kKillGt:
-    case AluVectorOpcode::kKillGe:
-    case AluVectorOpcode::kKillNe:
+    case ucode::AluVectorOpcode::kKillEq:
+    case ucode::AluVectorOpcode::kKillGt:
+    case ucode::AluVectorOpcode::kKillGe:
+    case ucode::AluVectorOpcode::kKillNe:
       return true;
     default:
       return false;
   }
 }
 
-bool IsScalarKillOpcode(AluScalarOpcode opcode) {
+bool IsScalarKillOpcode(ucode::AluScalarOpcode opcode) {
   switch (opcode) {
-    case AluScalarOpcode::kKillsEq:
-    case AluScalarOpcode::kKillsGt:
-    case AluScalarOpcode::kKillsGe:
-    case AluScalarOpcode::kKillsNe:
-    case AluScalarOpcode::kKillsOne:
+    case ucode::AluScalarOpcode::kKillsEq:
+    case ucode::AluScalarOpcode::kKillsGt:
+    case ucode::AluScalarOpcode::kKillsGe:
+    case ucode::AluScalarOpcode::kKillsNe:
+    case ucode::AluScalarOpcode::kKillsOne:
       return true;
     default:
       return false;
