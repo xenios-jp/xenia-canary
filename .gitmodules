@@ -43,8 +43,7 @@
 	url = https://github.com/xenia-canary/disruptorplus.git
 [submodule "third_party/DirectXShaderCompiler"]
 	path = third_party/DirectXShaderCompiler
-	url = https://github.com/wmarti/DirectXShaderCompiler.git
-	branch = dxilconv-macos
+	url = https://github.com/microsoft/DirectXShaderCompiler.git
 [submodule "third_party/date"]
 	path = third_party/date
 	url = https://github.com/HowardHinnant/date.git
