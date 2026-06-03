@@ -2417,10 +2417,15 @@ void HlslShaderTranslator::ProcessJumpInstruction(
 
 void HlslShaderTranslator::ProcessAllocInstruction(
     const ParsedAllocInstruction& instr, uint8_t export_eM) {
-  XELOGE(
-      "HLSL: UNIMPLEMENTED memexport alloc: count {} export_eM mask 0x{:02X}; "
-      "continuing without memory export stores",
-      instr.count, export_eM);
+  const bool starts_memexport =
+      instr.type == ucode::AllocType::kMemory &&
+      current_shader().memexport_eM_written() != 0;
+  if (export_eM || starts_memexport) {
+    XELOGE(
+        "HLSL: UNIMPLEMENTED memexport alloc: count {} export_eM mask "
+        "0x{:02X}; continuing without memory export stores",
+        instr.count, export_eM);
+  }
   EmitLine("// Alloc: " + std::to_string(instr.count) + " exports");
 }
 
