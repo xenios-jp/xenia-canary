@@ -24,9 +24,7 @@ namespace gpu {
 
 // Backend-agnostic wrapper around the DirectX Shader Compiler (DXC) for
 // compiling HLSL to DXIL, enabling SM 6.x features such as barycentric
-// interpolation and ResourceDescriptorHeap. When the DXC library is built with
-// Apple's Metal Shader Converter linked in, CompileToMetalLib() additionally
-// turns HLSL straight into a Metal library via DXC's -metal mode.
+// interpolation and ResourceDescriptorHeap.
 //
 // The DXC compiler library (dxcompiler.dll / libdxcompiler.dylib) is loaded at
 // runtime via LoadLibrary/dlopen, so the build has no link-time dependency on
@@ -54,19 +52,6 @@ class DxcCompiler {
   bool Compile(const std::string& hlsl_source, const std::string& entry_point,
                const std::string& target, std::vector<uint8_t>& dxil_out,
                std::string* error_message = nullptr);
-
-  // Compile HLSL source code straight to a Metal library, using DXC's -metal
-  // mode (HLSL -> DXIL -> Metal Shader Converter, all inside dxcompiler).
-  // Requires the DXC library to have been built with Metal Shader Converter
-  // support; otherwise compilation fails with an error message.
-  // target: shader target profile, e.g. "vs_6_6", "ps_6_6".
-  // Returns true on success, with the metallib bytes in metallib_out. On
-  // failure, error_message (if provided) contains the error description.
-  bool CompileToMetalLib(const std::string& hlsl_source,
-                         const std::string& entry_point,
-                         const std::string& target,
-                         std::vector<uint8_t>& metallib_out,
-                         std::string* error_message = nullptr);
 
   // Get disassembly of DXIL bytecode for debugging.
   bool Disassemble(const std::vector<uint8_t>& dxil,

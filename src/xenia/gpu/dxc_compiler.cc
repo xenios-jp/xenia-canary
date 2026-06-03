@@ -52,9 +52,9 @@ bool DxcCompiler::Initialize() {
 #if XE_PLATFORM_WIN32
   library_ = reinterpret_cast<void*>(LoadLibraryW(L"dxcompiler.dll"));
   if (library_) {
-    dxc_create_instance = reinterpret_cast<DxcCreateInstanceProc>(
-        GetProcAddress(reinterpret_cast<HMODULE>(library_),
-                       "DxcCreateInstance"));
+    dxc_create_instance =
+        reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(
+            reinterpret_cast<HMODULE>(library_), "DxcCreateInstance"));
   }
 #else
   // Candidate locations. dlopen interprets @executable_path/@loader_path/@rpath
@@ -199,121 +199,6 @@ bool DxcCompiler::Compile(const std::string& hlsl_source,
   dxil_out.assign(shader_data, shader_data + shader_size);
 
   shader_blob->Release();
-  result->Release();
-
-  return true;
-}
-
-bool DxcCompiler::CompileToMetalLib(const std::string& hlsl_source,
-                                    const std::string& entry_point,
-                                    const std::string& target,
-                                    std::vector<uint8_t>& metallib_out,
-                                    std::string* error_message) {
-  if (!IsAvailable()) {
-    if (error_message) {
-      *error_message = "DXC compiler not available";
-    }
-    return false;
-  }
-
-  // Convert entry point and target to wide strings (WCHAR == wchar_t here).
-  std::wstring entry_point_wide(entry_point.begin(), entry_point.end());
-  std::wstring target_wide(target.begin(), target.end());
-
-  // -metal runs the compiled DXIL through the linked Metal Shader Converter and
-  // swaps the object blob for the resulting metallib. DXC enforces two rules on
-  // this mode (see HLSLOptions.cpp): it requires a non-empty output object
-  // (-Fo) and rejects disassembly (-Fc). The -Fo name is only metadata; the
-  // bytes are retrieved via DXC_OUT_OBJECT below.
-  std::vector<LPCWSTR> arguments = {
-      L"-E",
-      entry_point_wide.c_str(),
-      L"-T",
-      target_wide.c_str(),
-      L"-metal",            // Emit a metallib instead of a DXIL container.
-      L"-Fo",               // Required by -metal: output object must be set...
-      L"shader.metallib",   // ...name is metadata only; bytes via DXC_OUT_OBJECT.
-  };
-
-  // Create source buffer.
-  DxcBuffer source_buffer;
-  source_buffer.Ptr = hlsl_source.c_str();
-  source_buffer.Size = hlsl_source.size();
-  source_buffer.Encoding = DXC_CP_UTF8;
-
-  // Compile the shader.
-  IDxcResult* result = nullptr;
-  HRESULT hr = compiler_->Compile(&source_buffer, arguments.data(),
-                                  static_cast<UINT32>(arguments.size()),
-                                  nullptr,  // No include handler
-                                  IID_PPV_ARGS(&result));
-
-  if (FAILED(hr)) {
-    if (error_message) {
-      *error_message = "DXC Compile call failed";
-    }
-    return false;
-  }
-
-  // Check compilation status.
-  HRESULT status;
-  result->GetStatus(&status);
-
-  if (FAILED(status)) {
-    // Retrieve error messages.
-    IDxcBlobUtf8* errors = nullptr;
-    if (SUCCEEDED(result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors),
-                                    nullptr)) &&
-        errors && errors->GetStringLength() > 0) {
-      if (error_message) {
-        *error_message = errors->GetStringPointer();
-      }
-      errors->Release();
-    } else {
-      if (error_message) {
-        *error_message = "Unknown Metal compilation error";
-      }
-    }
-    result->Release();
-    return false;
-  }
-
-  // With -metal, the object blob (DXC_OUT_OBJECT) is the metallib.
-  IDxcBlob* metallib_blob = nullptr;
-  if (FAILED(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&metallib_blob),
-                               nullptr)) ||
-      !metallib_blob) {
-    if (error_message) {
-      *error_message = "Failed to retrieve compiled metallib";
-    }
-    result->Release();
-    return false;
-  }
-
-  const uint8_t* metallib_data =
-      static_cast<const uint8_t*>(metallib_blob->GetBufferPointer());
-  size_t metallib_size = metallib_blob->GetBufferSize();
-
-  // A metallib begins with the 'MTLB' magic. Guard against a silent fall-through
-  // to a plain DXIL container (which would only fail later, opaquely, inside
-  // MTLDevice::newLibrary) if -metal codegen did not run for any reason.
-  if (metallib_size < 4 || metallib_data[0] != 'M' ||
-      metallib_data[1] != 'T' || metallib_data[2] != 'L' ||
-      metallib_data[3] != 'B') {
-    if (error_message) {
-      *error_message =
-          "DXC -metal did not produce a metallib (missing MTLB magic); the DXC "
-          "library may lack Metal Shader Converter support";
-    }
-    metallib_blob->Release();
-    result->Release();
-    return false;
-  }
-
-  // Copy the metallib bytes to the output vector.
-  metallib_out.assign(metallib_data, metallib_data + metallib_size);
-
-  metallib_blob->Release();
   result->Release();
 
   return true;
