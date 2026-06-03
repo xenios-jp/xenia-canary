@@ -1122,6 +1122,8 @@ MetalPipelineCache::~MetalPipelineCache() {
   shader_translator_.reset();
   dxbc_to_dxil_converter_.reset();
   metal_shader_converter_.reset();
+  hlsl_translator_.reset();
+  dxc_compiler_.reset();
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,8 +1149,20 @@ bool MetalPipelineCache::InitializeShaderTranslation(
 
   dxbc_to_dxil_converter_ = std::make_unique<DxbcToDxilConverter>();
   if (!dxbc_to_dxil_converter_->Initialize()) {
-    XELOGE("Failed to initialize DXBC to DXIL converter");
-    return false;
+    // The DXBC->DXIL path needs the dxilconv library. Under metal_dxil, guest
+    // shaders take the HLSL->DXC(-metal) path instead, so an unavailable
+    // dxilconv is non-fatal here -- but shaders still on the DXBC path
+    // (depth-only, geometry, tessellation) will fail to compile until they are
+    // moved over too. Without metal_dxil there is no shader path, so fail hard.
+    if (cvars::metal_dxil) {
+      XELOGW(
+          "metal_dxil: DXBC->DXIL converter unavailable; guest shaders use the "
+          "HLSL path, but DXBC-path shaders (depth-only/geometry/tessellation) "
+          "will fail to compile");
+    } else {
+      XELOGE("Failed to initialize DXBC to DXIL converter");
+      return false;
+    }
   }
 
   metal_shader_converter_ = std::make_unique<MetalShaderConverter>();
@@ -1158,6 +1172,25 @@ bool MetalPipelineCache::InitializeShaderTranslation(
   }
   generated_stages_ = std::make_unique<GeneratedStageCache>(
       *this, device_, *dxbc_to_dxil_converter_, *metal_shader_converter_);
+
+  // Experimental HLSL -> DXC(-metal) path. When enabled, guest shaders are
+  // translated to HLSL and DXC emits the metallib directly (the DXIL -> Metal
+  // Shader Converter step runs inside dxcompiler), bypassing the DXBC -> DXIL
+  // -> MSC chain above. The translator's own DxcCompiler is left unset so it
+  // emits HLSL; this cache owns the -metal compile via dxc_compiler_.
+  if (cvars::metal_dxil) {
+    dxc_compiler_ = std::make_unique<DxcCompiler>();
+    if (dxc_compiler_->Initialize()) {
+      hlsl_translator_ = std::make_unique<HlslShaderTranslator>(
+          ui::GraphicsProvider::GpuVendorID::kApple,
+          /*bindless_resources_used=*/true, edram_rov_used,
+          /*use_shader_model_6_6=*/true);
+      XELOGI("metal_dxil: HLSL -> DXC(-metal) shader path enabled");
+    } else {
+      XELOGW("metal_dxil: dxcompiler unavailable; using the DXBC -> MSC path");
+      dxc_compiler_.reset();
+    }
+  }
 
   // Configure MSC minimum targets.
   if (device_) {
@@ -2111,6 +2144,13 @@ bool MetalPipelineCache::EnsureMetalTranslationReady(
   if (translation->is_valid()) {
     return true;
   }
+
+  // Experimental HLSL -> DXC(-metal) path; the members are non-null only when
+  // metal_dxil is enabled and a Metal-capable dxcompiler initialized.
+  if (hlsl_translator_ && dxc_compiler_) {
+    return EnsureMetalTranslationReadyHlsl(translation);
+  }
+
   if (!EnsureDxilTranslationReady(translation, "guest")) {
     return false;
   }
@@ -2155,6 +2195,67 @@ bool MetalPipelineCache::EnsureMetalTranslationReady(
   }
 
   return true;
+}
+
+bool MetalPipelineCache::EnsureMetalTranslationReadyHlsl(
+    MetalShader::MetalTranslation* translation) {
+  std::lock_guard<std::mutex> lock(shader_translation_mutex_);
+  if (translation->is_valid()) {
+    return true;
+  }
+
+  // Translate guest microcode to HLSL. The HLSL translator stores the HLSL text
+  // as the translation's binary (its DxcCompiler is intentionally unset, so it
+  // emits HLSL rather than taking a DXIL detour). This path assumes the
+  // translation has not already been translated to DXBC by the other path.
+  if (!translation->is_translated() ||
+      translation->translated_binary().empty()) {
+    if (!hlsl_translator_->TranslateAnalyzedShader(*translation)) {
+      XELOGE("metal_dxil: failed to translate shader {:016X} to HLSL",
+             translation->shader().ucode_data_hash());
+      return false;
+    }
+  }
+
+  std::string profile;
+  switch (translation->shader().type()) {
+    case xenos::ShaderType::kVertex:
+      profile = "vs_6_6";
+      break;
+    case xenos::ShaderType::kPixel:
+      profile = "ps_6_6";
+      break;
+    default:
+      XELOGE("metal_dxil: unsupported shader type {}",
+             uint32_t(translation->shader().type()));
+      return false;
+  }
+
+  const std::vector<uint8_t>& hlsl_bytes = translation->translated_binary();
+  std::string hlsl_source(hlsl_bytes.begin(), hlsl_bytes.end());
+
+  // Compile HLSL straight to a metallib via DXC's -metal mode.
+  MetalStageCompileResult result;
+  std::string error;
+  if (!dxc_compiler_->CompileToMetalLib(hlsl_source, "main", profile,
+                                        result.metallib_data, &error)) {
+    XELOGE("metal_dxil: DXC -metal failed for shader {:016X} ({}): {}",
+           translation->shader().ucode_data_hash(), profile, error);
+    return false;
+  }
+  result.success = true;
+  // DXC -metal names the Metal entry function after the HLSL entry point.
+  result.function_name = "main";
+
+  uint64_t library_ms = 0;
+  bool library_created = false;
+  bool installed =
+      translation->InstallMetal(device_, result, &library_ms, &library_created);
+  if (library_created) {
+    RecordLibraryCreation(result.metallib_data.size(),
+                          translation->metal_library() != nullptr, library_ms);
+  }
+  return installed;
 }
 
 bool MetalPipelineCache::EnsureDxbcTranslationReady(

@@ -26,6 +26,8 @@
 #include "xenia/base/hash.h"
 #include "xenia/base/string_buffer.h"
 #include "xenia/gpu/dxbc_shader_translator.h"
+#include "xenia/gpu/dxc_compiler.h"
+#include "xenia/gpu/hlsl_shader_translator.h"
 #include "xenia/gpu/metal/dxbc_to_dxil_converter.h"
 #include "xenia/gpu/metal/metal_geometry_shader.h"
 #include "xenia/gpu/metal/metal_shader.h"
@@ -227,6 +229,9 @@ class MetalPipelineCache {
   bool EnsureDxilTranslationReady(MetalShader::MetalTranslation* translation,
                                   const char* stage_name);
   bool EnsureMetalTranslationReady(MetalShader::MetalTranslation* translation);
+  // Experimental HLSL -> DXC(-metal) -> metallib path (gated by metal_dxil).
+  bool EnsureMetalTranslationReadyHlsl(
+      MetalShader::MetalTranslation* translation);
 
   // Ensure the depth-only pixel shader is compiled and ready.
   bool EnsureDepthOnlyPixelShader();
@@ -293,6 +298,10 @@ class MetalPipelineCache {
   std::unique_ptr<DxbcShaderTranslator> shader_translator_;
   std::unique_ptr<DxbcToDxilConverter> dxbc_to_dxil_converter_;
   std::unique_ptr<MetalShaderConverter> metal_shader_converter_;
+  // Experimental HLSL -> DXC(-metal) path, created only when cvar metal_dxil is
+  // set and a Metal-capable dxcompiler initializes.
+  std::unique_ptr<HlslShaderTranslator> hlsl_translator_;
+  std::unique_ptr<DxcCompiler> dxc_compiler_;
   std::mutex shader_translation_mutex_;
 
   std::atomic<uint64_t> dxil_convert_requests_{0};
