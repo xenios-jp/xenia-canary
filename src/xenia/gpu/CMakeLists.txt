@@ -3,6 +3,9 @@ xe_platform_sources(xenia-gpu ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(xenia-gpu PRIVATE
   ${PROJECT_SOURCE_DIR}/third_party/glslang
   ${PROJECT_SOURCE_DIR}/third_party/Vulkan-Headers/include
+  # DXC headers for the HLSL->DXIL translator path (dxc_compiler.cc). The
+  # dxcompiler library itself is loaded at runtime, not linked here.
+  ${PROJECT_SOURCE_DIR}/third_party/DirectXShaderCompiler/include
 )
 target_link_libraries(xenia-gpu PUBLIC dxbc fmt snappy xxhash xenia-base xenia-ui)
 target_link_libraries(xenia-gpu PRIVATE glslang-spirv)
