@@ -75,6 +75,15 @@ DEFINE_int32(metal_pipeline_creation_threads, -1,
              "-1 = auto (75% of cores), 0 = disabled (synchronous).",
              "Metal");
 
+DEFINE_bool(metal_dxil, false,
+            "Experimental: translate guest shaders to HLSL and let DXC emit the "
+            "metallib directly via its -metal mode (HLSL -> DXIL -> Metal "
+            "Shader Converter, all inside dxcompiler), instead of the DXBC -> "
+            "DXIL -> Metal Shader Converter path. Requires a dxcompiler library "
+            "built with Metal Shader Converter support; falls back to the DXBC "
+            "path when unavailable.",
+            "Metal");
+
 namespace xe {
 namespace gpu {
 namespace metal {
