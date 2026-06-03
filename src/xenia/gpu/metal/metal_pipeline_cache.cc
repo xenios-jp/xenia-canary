@@ -1201,7 +1201,9 @@ bool MetalPipelineCache::InitializeShaderTranslation(
   // Configure MSC minimum targets.
   if (device_) {
     IRGPUFamily min_family = IRGPUFamilyMetal3;
-    if (device_->supportsFamily(MTL::GPUFamilyApple10)) {
+    if (cvars::metal_msc_debug_validation) {
+      min_family = IRGPUFamilyMetal3;
+    } else if (device_->supportsFamily(MTL::GPUFamilyApple10)) {
       min_family = IRGPUFamilyApple10;
     } else if (device_->supportsFamily(MTL::GPUFamilyApple9)) {
       min_family = IRGPUFamilyApple9;

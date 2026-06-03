@@ -71,6 +71,7 @@ DECLARE_bool(readback_resolve_half_pixel_offset);
 DECLARE_bool(gpu_3d_to_2d_texture);
 
 DECLARE_bool(metal_shader_disk_cache);
+DECLARE_bool(metal_msc_debug_validation);
 DECLARE_bool(metal_pipeline_binary_archive);
 DECLARE_int32(metal_draw_ring_count);
 DECLARE_bool(metal_use_heaps);

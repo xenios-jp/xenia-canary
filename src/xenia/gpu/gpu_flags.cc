@@ -222,6 +222,14 @@ DEFINE_bool(metal_shader_disk_cache, true,
             "the packed Metal artifact store.",
             "Metal");
 
+DEFINE_bool(
+    metal_msc_debug_validation, false,
+    "Enable conservative Metal Shader Converter diagnostics while developing "
+    "the DXIL translator. This forces MSC validation-all, enables the known "
+    "runtime compatibility flags, and targets macOS / Metal3 for converted "
+    "shader code.",
+    "Metal");
+
 DEFINE_bool(metal_pipeline_binary_archive, true,
             "Use MTLBinaryArchive for Metal pipeline compilation caching. "
             "Requires store_shaders and a compatible OS/driver.",
