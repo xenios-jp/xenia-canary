@@ -21,25 +21,38 @@
 #include <fstream>
 #include <string>
 
+// dxilconv's public header is upstream microsoft DXC, fully SAL-annotated only
+// for Windows. DXC's WinAdapter.h (pulled in via dxcapi.h) stubs the basic SAL
+// annotations off-Windows, but not these buffer/optional-string variants that
+// the header still uses. They are pure no-op hints here; define the missing
+// ones before including the header.
+#if !defined(_WIN32)
+#ifndef _In_reads_bytes_
+#define _In_reads_bytes_(size)
+#endif
+#ifndef _In_opt_z_
+#define _In_opt_z_
+#endif
+#ifndef _Outptr_result_bytebuffer_maybenull_
+#define _Outptr_result_bytebuffer_maybenull_(size)
+#endif
+#ifndef _Outptr_result_maybenull_z_
+#define _Outptr_result_maybenull_z_
+#endif
+#endif  // !_WIN32
+
 #include "DxbcConverter.h"
 #include "third_party/xxhash/xxhash.h"
 #include "xenia/base/logging.h"
 
 #if !defined(_WIN32) && defined(__EMULATE_UUID)
-size_t UuidStrHash(const char* key) {
-  long hash = 0;
-  while (*key) {
-    hash = (hash << 4) + *(key++);
-    long high_bits = hash & 0xF0000000L;
-    if (high_bits) {
-      hash ^= high_bits >> 24;
-    }
-    hash &= ~high_bits;
-  }
-  return static_cast<size_t>(hash);
-}
-
-DEFINE_CROSS_PLATFORM_UUIDOF(IUnknown)
+// DXC's non-Windows __uuidof emulation resolves an interface's IID through a
+// CROSS_PLATFORM_UUIDOF(T, spec) specialization of __emulated_uuidof<T>().
+// WinAdapter already provides that for IUnknown and the IDxc* interfaces, but
+// dxilconv's header declares IDxbcConverter with __declspec(uuid(...)), which
+// __EMULATE_UUID discards -- so __uuidof(IDxbcConverter) would otherwise fail
+// to link. Associate the IID here with the same GUID the header declares.
+CROSS_PLATFORM_UUIDOF(IDxbcConverter, "5F956ED5-78D1-4B15-8247-F7187614A041")
 #endif
 
 namespace xe {
