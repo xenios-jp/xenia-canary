@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <sstream>
+#include <string>
 
 #include "xenia/base/assert.h"
 
@@ -77,6 +78,42 @@ void AppendHlslClipDeclarations(std::ostringstream& hlsl,
   }
 }
 
+void AppendHlslCullDeclarations(std::ostringstream& hlsl,
+                                uint32_t cull_distance_count) {
+  if (!cull_distance_count) {
+    return;
+  }
+  if (cull_distance_count <= 4) {
+    hlsl << "  " << HlslFloatVectorType(cull_distance_count)
+         << " xe_cull_distance : SV_CullDistance0;\n";
+  } else {
+    hlsl << "  float4 xe_cull_distance_0123 : SV_CullDistance0;\n";
+    hlsl << "  " << HlslFloatVectorType(cull_distance_count - 4)
+         << " xe_cull_distance_45 : SV_CullDistance1;\n";
+  }
+}
+
+std::string HlslDistanceComponent(const char* name, uint32_t distance_count,
+                                  uint32_t index,
+                                  const std::string& source) {
+  const char* components = "xyzw";
+  std::string field = source + "." + name;
+  if (distance_count <= 4) {
+    if (distance_count == 1) {
+      return field;
+    }
+    return field + "." + components[index];
+  }
+  if (index < 4) {
+    return field + "_0123." + components[index];
+  }
+  uint32_t tail_index = index - 4;
+  if (distance_count - 4 == 1) {
+    return field + "_45";
+  }
+  return field + "_45." + components[tail_index];
+}
+
 void AppendHlslClipCopy(std::ostringstream& hlsl,
                         uint32_t clip_distance_count,
                         const char* destination, const char* source) {
@@ -128,6 +165,10 @@ std::string CreateHlslGeometryShader(GeometryShaderKey key) {
   std::ostringstream hlsl;
   const uint32_t clip_distance_count =
       key.user_clip_plane_cull ? 0 : key.user_clip_plane_count;
+  const uint32_t cull_distance_count =
+      (key.user_clip_plane_cull ? key.user_clip_plane_count : 0) +
+      key.has_vertex_kill_and;
+  const uint32_t input_vertex_count = GeometryInputVertexCount(key.type);
 
   hlsl << "// Generated HLSL geometry shader - Xenia Xbox 360 Emulator\n";
   hlsl << "// Shader Model 6.0\n\n";
@@ -150,6 +191,7 @@ std::string CreateHlslGeometryShader(GeometryShaderKey key) {
   }
   hlsl << "  precise float4 xe_position : SV_Position;\n";
   AppendHlslClipDeclarations(hlsl, clip_distance_count);
+  AppendHlslCullDeclarations(hlsl, cull_distance_count);
   hlsl << "};\n\n";
 
   hlsl << "struct GSOut {\n";
@@ -202,11 +244,24 @@ std::string CreateHlslGeometryShader(GeometryShaderKey key) {
 
   hlsl << "[maxvertexcount(4)]\n";
   hlsl << "void main(" << HlslGeometryInputPrimitive(key.type)
-       << " GSIn input[" << GeometryInputVertexCount(key.type)
+       << " GSIn input[" << input_vertex_count
        << "], inout TriangleStream<GSOut> stream) {\n";
 
-  for (uint32_t i = 0; i < GeometryInputVertexCount(key.type); ++i) {
+  for (uint32_t i = 0; i < input_vertex_count; ++i) {
     hlsl << "  if (XePositionIsNaN(input[" << i << "].xe_position)) return;\n";
+  }
+  for (uint32_t i = 0; i < cull_distance_count; ++i) {
+    hlsl << "  if (";
+    for (uint32_t j = 0; j < input_vertex_count; ++j) {
+      if (j) {
+        hlsl << " && ";
+      }
+      hlsl << HlslDistanceComponent(
+                  "xe_cull_distance", cull_distance_count, i,
+                  "input[" + std::to_string(j) + "]")
+           << " < 0.0";
+    }
+    hlsl << ") return;\n";
   }
 
   switch (key.type) {

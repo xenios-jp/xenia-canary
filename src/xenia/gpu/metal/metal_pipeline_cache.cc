@@ -1190,11 +1190,13 @@ bool MetalPipelineCache::InitializeShaderTranslation(
       hlsl_translator_ = std::make_unique<HlslShaderTranslator>(
           ui::GraphicsProvider::GpuVendorID::kApple,
           /*bindless_resources_used=*/true, edram_rov_used,
-          /*use_shader_model_6_6=*/true);
+          /*use_shader_model_6_6=*/true, draw_resolution_scale_x,
+          draw_resolution_scale_y);
       XELOGI("metal_dxil: HLSL -> DXIL -> MSC guest shader path enabled");
     } else {
-      XELOGW("metal_dxil: dxcompiler unavailable; using the DXBC -> MSC path");
+      XELOGE("metal_dxil: dxcompiler unavailable; no DXBC fallback is allowed");
       dxc_compiler_.reset();
+      return false;
     }
   }
 
@@ -2172,6 +2174,27 @@ bool MetalPipelineCache::EnsureDxilTranslationReady(
   std::lock_guard<std::mutex> lock(shader_translation_mutex_);
   if (!translation->GetDxilDataCopy().empty()) {
     return true;
+  }
+
+  Shader& shader = translation->shader();
+  if (!shader.is_ucode_analyzed()) {
+    shader.AnalyzeUcode(ucode_disasm_buffer());
+  }
+
+  if (cvars::metal_dxil && (!hlsl_translator_ || !dxc_compiler_)) {
+    XELOGE(
+        "metal_dxil: {} shader {:016X} requested DXIL translation, but the "
+        "HLSL->DXIL translator is unavailable; no DXBC fallback is allowed",
+        stage_name ? stage_name : "guest", shader.ucode_data_hash());
+    return false;
+  }
+
+  if (hlsl_translator_ && dxc_compiler_ && shader.memexport_eM_written() != 0) {
+    XELOGE(
+        "metal_dxil: {} shader {:016X} uses memexport (eM mask 0x{:02X}); "
+        "HLSL memexport is unimplemented and no DXBC fallback is allowed",
+        stage_name ? stage_name : "guest", shader.ucode_data_hash(),
+        shader.memexport_eM_written());
   }
 
   // metal_dxil: produce DXIL by translating guest ucode to HLSL and compiling

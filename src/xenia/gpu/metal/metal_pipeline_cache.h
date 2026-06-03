@@ -156,7 +156,7 @@ class MetalPipelineCache {
     uint32_t alpha_to_mask_enable;
     uint32_t blendcontrol[4];
 
-    static constexpr uint32_t kVersion = 0x20260530;
+    static constexpr uint32_t kVersion = 0x20260603;
   });
 
   XEPACKEDSTRUCT(MetalPipelineStoredDescription, {
