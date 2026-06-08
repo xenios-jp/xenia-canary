@@ -490,7 +490,8 @@ bool SharedMemory::IsRangeValid(uint32_t start, uint32_t length) const {
       block_valid |= block_before;
     }
     if (i == block_last && (page_last & 63) != 63) {
-      uint64_t block_after = ~((uint64_t(1) << ((page_last & 63) + 1)) - 1);
+      uint64_t block_after =
+          ~((uint64_t(1) << ((page_last & 63) + 1)) - 1);
       block_valid |= block_after;
     }
     if (block_valid != ~uint64_t(0)) {
@@ -534,8 +535,7 @@ bool SharedMemory::IsRangeInvalid(uint32_t start, uint32_t length) const {
 }
 
 void SharedMemory::WatchRangeForCpuWrites(uint32_t start, uint32_t length) {
-  if (!length || start >= kBufferSize ||
-      !memory_invalidation_callback_handle_) {
+  if (!length || start >= kBufferSize || !memory_invalidation_callback_handle_) {
     return;
   }
   length = std::min(length, kBufferSize - start);
@@ -619,10 +619,11 @@ bool SharedMemory::RequestRanges(const Range* ranges, uint32_t range_count,
 
   request_stats.upload_page_ranges_before_coalesce = current_upload_range;
 
-  std::sort(
-      uploads, uploads + current_upload_range,
-      [](const std::pair<uint32_t, uint32_t>& a,
-         const std::pair<uint32_t, uint32_t>& b) { return a.first < b.first; });
+  std::sort(uploads, uploads + current_upload_range,
+            [](const std::pair<uint32_t, uint32_t>& a,
+               const std::pair<uint32_t, uint32_t>& b) {
+              return a.first < b.first;
+            });
 
   uint32_t coalesced_upload_range_count = 0;
   for (uint32_t i = 0; i < current_upload_range; ++i) {
@@ -650,11 +651,10 @@ bool SharedMemory::RequestRanges(const Range* ranges, uint32_t range_count,
     }
   }
 
-  request_stats.upload_page_ranges_after_coalesce =
-      coalesced_upload_range_count;
+  request_stats.upload_page_ranges_after_coalesce = coalesced_upload_range_count;
   for (uint32_t i = 0; i < coalesced_upload_range_count; ++i) {
-    request_stats.upload_bytes += uint64_t(uploads[i].second)
-                                  << page_size_log2_;
+    request_stats.upload_bytes +=
+        uint64_t(uploads[i].second) << page_size_log2_;
   }
 
   return UploadRanges(uploads, coalesced_upload_range_count);
