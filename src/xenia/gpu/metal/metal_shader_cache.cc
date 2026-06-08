@@ -30,7 +30,7 @@ std::unique_ptr<MetalArtifactStore> g_metal_artifact_store =
 
 namespace {
 
-constexpr uint32_t kArtifactFileMagic = 0x46414D58;    // 'XMAF'
+constexpr uint32_t kArtifactFileMagic = 0x46414D58;  // 'XMAF'
 constexpr uint32_t kArtifactRecordMagic = 0x52414D58;  // 'XMAR'
 constexpr uint32_t kMaxArtifactPayloadSize = 128u * 1024u * 1024u;
 
@@ -223,7 +223,8 @@ bool MetalArtifactStore::LoadIndex() {
 
   ArtifactFileHeader header = {};
   if (std::fread(&header, sizeof(header), 1, artifact_file_) != 1 ||
-      header.magic != kArtifactFileMagic || header.version != kStorageVersion) {
+      header.magic != kArtifactFileMagic ||
+      header.version != kStorageVersion) {
     xe::filesystem::TruncateStdioFile(artifact_file_, 0);
     header.magic = kArtifactFileMagic;
     header.version = kStorageVersion;
@@ -257,8 +258,8 @@ bool MetalArtifactStore::LoadIndex() {
     key.modification = record.modification;
     key.stage = record.stage;
     key.kind = static_cast<ArtifactKind>(record.kind);
-    index_[key] = RecordLocation{uint64_t(payload_offset), record.payload_size,
-                                 record.payload_hash};
+    index_[key] = RecordLocation{uint64_t(payload_offset),
+                                 record.payload_size, record.payload_hash};
     valid_bytes = uint64_t(payload_offset) + record.payload_size;
   }
 
@@ -317,12 +318,13 @@ void MetalArtifactStore::StorePayload(const ArtifactKey& key,
     return;
   }
   std::fflush(artifact_file_);
-  index_[key] = RecordLocation{uint64_t(payload_offset), uint32_t(payload_size),
-                               record.payload_hash};
+  index_[key] =
+      RecordLocation{uint64_t(payload_offset), uint32_t(payload_size),
+                     record.payload_hash};
 }
 
-bool MetalArtifactStore::LoadStageCompile(const MetalStageCompileKey& key,
-                                          MetalStageCompileResult* out) {
+bool MetalArtifactStore::LoadStageCompile(
+    const MetalStageCompileKey& key, MetalStageCompileResult* out) {
   if (!out) {
     return false;
   }
@@ -367,15 +369,18 @@ bool MetalArtifactStore::LoadStageCompile(const MetalStageCompileKey& key,
   result.has_reflection = header.has_reflection != 0;
   result.has_mesh_stage = header.has_mesh_stage != 0;
   result.has_geometry_stage = header.has_geometry_stage != 0;
-  if (!ReadString(ptr, end, header.function_name_size, &result.function_name)) {
+  if (!ReadString(ptr, end, header.function_name_size,
+                  &result.function_name)) {
     return false;
   }
-  if (!ReadString(ptr, end, header.error_message_size, &result.error_message)) {
+  if (!ReadString(ptr, end, header.error_message_size,
+                  &result.error_message)) {
     return false;
   }
   result.metallib_data.resize(header.metallib_size);
   if (header.metallib_size &&
-      !ReadBytes(ptr, end, result.metallib_data.data(), header.metallib_size)) {
+      !ReadBytes(ptr, end, result.metallib_data.data(),
+                 header.metallib_size)) {
     return false;
   }
   result.stage_in_metallib.resize(header.stage_in_metallib_size);
@@ -436,7 +441,8 @@ bool MetalArtifactStore::LoadStageCompile(const MetalStageCompileKey& key,
     }
     result.reflection.vertex_inputs.push_back(std::move(input));
   }
-  result.reflection.function_constants.reserve(header.function_constant_count);
+  result.reflection.function_constants.reserve(
+      header.function_constant_count);
   for (uint32_t i = 0; i < header.function_constant_count; ++i) {
     StageCompileStringRecord record = {};
     if (!ReadPod(ptr, end, &record)) {
@@ -469,14 +475,16 @@ void MetalArtifactStore::StoreStageCompile(
   header.function_name_size = uint32_t(result.function_name.size());
   header.error_message_size = uint32_t(result.error_message.size());
   header.metallib_size = uint32_t(result.metallib_data.size());
-  header.stage_in_metallib_size = uint32_t(result.stage_in_metallib.size());
+  header.stage_in_metallib_size =
+      uint32_t(result.stage_in_metallib.size());
   header.success = result.success ? 1u : 0u;
   header.has_reflection = result.has_reflection ? 1u : 0u;
   header.has_mesh_stage = result.has_mesh_stage ? 1u : 0u;
   header.has_geometry_stage = result.has_geometry_stage ? 1u : 0u;
   header.vertex_output_size_in_bytes =
       result.reflection.vertex_output_size_in_bytes;
-  header.vertex_input_count = uint32_t(result.reflection.vertex_inputs.size());
+  header.vertex_input_count =
+      uint32_t(result.reflection.vertex_inputs.size());
   header.gs_max_input_primitives_per_mesh_threadgroup =
       result.reflection.gs_max_input_primitives_per_mesh_threadgroup;
   header.function_constant_count =
@@ -486,14 +494,16 @@ void MetalArtifactStore::StoreStageCompile(
       result.reflection.hs_max_patches_per_object_threadgroup;
   header.hs_max_object_threads_per_patch =
       result.reflection.hs_max_object_threads_per_patch;
-  header.hs_patch_constants_size = result.reflection.hs_patch_constants_size;
+  header.hs_patch_constants_size =
+      result.reflection.hs_patch_constants_size;
   header.hs_input_control_point_count =
       result.reflection.hs_input_control_point_count;
   header.hs_output_control_point_count =
       result.reflection.hs_output_control_point_count;
   header.hs_output_control_point_size =
       result.reflection.hs_output_control_point_size;
-  header.hs_tessellator_domain = result.reflection.hs_tessellator_domain;
+  header.hs_tessellator_domain =
+      result.reflection.hs_tessellator_domain;
   header.hs_tessellator_partitioning =
       result.reflection.hs_tessellator_partitioning;
   header.hs_tessellator_output_primitive =
@@ -509,8 +519,10 @@ void MetalArtifactStore::StoreStageCompile(
       result.reflection.ds_input_control_point_count;
   header.ds_input_control_point_size =
       result.reflection.ds_input_control_point_size;
-  header.ds_patch_constants_size = result.reflection.ds_patch_constants_size;
-  header.ds_tessellator_domain = result.reflection.ds_tessellator_domain;
+  header.ds_patch_constants_size =
+      result.reflection.ds_patch_constants_size;
+  header.ds_tessellator_domain =
+      result.reflection.ds_tessellator_domain;
   header.ds_tessellation_type_half =
       result.reflection.ds_tessellation_type_half ? 1u : 0u;
 
@@ -585,7 +597,8 @@ bool MetalArtifactStore::LoadDxilBytecode(const MetalDxilBytecodeKey& key,
   }
 
   out->resize(header.dxil_size);
-  if (header.dxil_size && !ReadBytes(ptr, end, out->data(), header.dxil_size)) {
+  if (header.dxil_size &&
+      !ReadBytes(ptr, end, out->data(), header.dxil_size)) {
     return false;
   }
   return ptr == end;

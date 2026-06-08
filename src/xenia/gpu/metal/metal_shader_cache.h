@@ -91,8 +91,10 @@ class MetalArtifactStore {
 
   static constexpr uint32_t kStorageVersion = 3;
 
-  static ArtifactKey MakeStageCompileKey(const MetalStageCompileKey& stage_key);
-  static ArtifactKey MakeDxilBytecodeKey(const MetalDxilBytecodeKey& dxil_key);
+  static ArtifactKey MakeStageCompileKey(
+      const MetalStageCompileKey& stage_key);
+  static ArtifactKey MakeDxilBytecodeKey(
+      const MetalDxilBytecodeKey& dxil_key);
   bool LoadStageCompile(const MetalStageCompileKey& key,
                         MetalStageCompileResult* out);
   void StoreStageCompile(const MetalStageCompileKey& key,

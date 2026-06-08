@@ -41,8 +41,8 @@ MetalUploadBufferPool::MetalPage::~MetalPage() {
 ui::GraphicsUploadBufferPool::Page*
 MetalUploadBufferPool::CreatePageImplementation() {
   MTL::Buffer* buffer = device_->newBuffer(
-      page_size_,
-      MTL::ResourceStorageModeShared | MTL::ResourceCPUCacheModeWriteCombined);
+      page_size_, MTL::ResourceStorageModeShared |
+                      MTL::ResourceCPUCacheModeWriteCombined);
   if (!buffer) {
     XELOGE("MetalUploadBufferPool: Failed to allocate {} byte page",
            page_size_);
@@ -75,12 +75,10 @@ uint8_t* MetalUploadBufferPool::Request(uint64_t submission_index, size_t size,
   return reinterpret_cast<uint8_t*>(page->mapping_) + offset;
 }
 
-uint8_t* MetalUploadBufferPool::RequestPartial(uint64_t submission_index,
-                                               size_t size, size_t alignment,
-                                               MTL::Buffer** buffer_out,
-                                               size_t& offset_out,
-                                               uint64_t& gpu_address_out,
-                                               size_t& size_out) {
+uint8_t* MetalUploadBufferPool::RequestPartial(
+    uint64_t submission_index, size_t size, size_t alignment,
+    MTL::Buffer** buffer_out, size_t& offset_out, uint64_t& gpu_address_out,
+    size_t& size_out) {
   size_t offset, size_obtained;
   const MetalPage* page =
       static_cast<const MetalPage*>(GraphicsUploadBufferPool::RequestPartial(
