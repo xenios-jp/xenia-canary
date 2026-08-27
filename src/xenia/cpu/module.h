@@ -10,6 +10,8 @@
 #ifndef XENIA_CPU_MODULE_H_
 #define XENIA_CPU_MODULE_H_
 
+#include <atomic>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <string>
@@ -26,6 +28,26 @@ namespace cpu {
 
 class Processor;
 
+struct InfoCacheFlags {
+  uint32_t was_resolved : 1;  // has this address ever been called/requested
+                              // via resolvefunction?
+  uint32_t accessed_mmio : 1;
+  uint32_t is_syscall_func : 1;
+  uint32_t is_return_site : 1;  // address can be reached from another function
+                                // by returning
+  uint32_t reserved : 28;
+};
+static_assert(sizeof(InfoCacheFlags) == 4,
+              "InfoCacheFlags size should be equal to sizeof ppc instruction.");
+
+// Slots are shared by several threads; set bits atomically.
+inline void AtomicSetInfoCacheFlags(InfoCacheFlags* slot, InfoCacheFlags bits) {
+  uint32_t mask;
+  std::memcpy(&mask, &bits, sizeof(mask));
+  std::atomic_ref<uint32_t>(*reinterpret_cast<uint32_t*>(slot))
+      .fetch_or(mask, std::memory_order_relaxed);
+}
+
 class Module {
  public:
   explicit Module(Processor* processor);
@@ -37,6 +59,10 @@ class Module {
   virtual bool is_executable() const = 0;
 
   virtual bool ContainsAddress(uint32_t address);
+
+  virtual InfoCacheFlags* GetInstructionAddressFlags(uint32_t guest_address) {
+    return nullptr;
+  }
 
   Symbol* LookupSymbol(uint32_t address, bool wait = true);
   virtual Symbol::Status DeclareFunction(uint32_t address,

@@ -109,11 +109,55 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   static void SetupReg(const hir::Value* v, Xbyak_aarch64::VReg& r) {
     r = Xbyak_aarch64::VReg(MapReg(v, vec_reg_map_, VEC_COUNT, "vec"));
   }
+  // True when tail labels are provably within b.cond/cbnz reach.
+  bool near_tail_branches_safe() const { return near_tail_branches_safe_; }
 
   Xbyak_aarch64::Label& epilog_label() { return *epilog_label_; }
 
   FunctionDebugInfo* debug_info() const { return debug_info_; }
   size_t stack_size() const { return stack_size_; }
+
+  // The declared condition must be true exactly when the register is nonzero.
+  void DeclareFlagsZeroTest(int gpr_reg, bool is64) {
+    DeclareFlagsNonzeroCond(gpr_reg, is64, Xbyak_aarch64::NE);
+  }
+  void DeclareFlagsNonzeroCond(int gpr_reg, bool is64,
+                               Xbyak_aarch64::Cond cond) {
+    flags_zero_fresh_reg_ = gpr_reg;
+    flags_zero_fresh_is64_ = is64;
+    flags_zero_fresh_cond_ = cond;
+  }
+  bool FlagsNonzeroCondHeld(int gpr_reg, bool is64,
+                            Xbyak_aarch64::Cond* out_cond) const {
+    if (flags_zero_armed_reg_ == gpr_reg && flags_zero_armed_is64_ == is64 &&
+        gpr_reg >= 0) {
+      *out_cond = flags_zero_armed_cond_;
+      return true;
+    }
+    return false;
+  }
+  bool FlagsHoldZeroTest(int gpr_reg, bool is64) const {
+    return flags_zero_armed_reg_ == gpr_reg && flags_zero_armed_is64_ == is64 &&
+           gpr_reg >= 0 && flags_zero_armed_cond_ == Xbyak_aarch64::NE;
+  }
+  void ResetFlagsZeroTest() {
+    flags_zero_fresh_reg_ = flags_zero_armed_reg_ = -1;
+    w16_holds_fresh_ = w16_holds_armed_ = nullptr;
+  }
+  void ShiftFlagsZeroTest() {
+    flags_zero_armed_reg_ = flags_zero_fresh_reg_;
+    flags_zero_armed_is64_ = flags_zero_fresh_is64_;
+    flags_zero_armed_cond_ = flags_zero_fresh_cond_;
+    flags_zero_fresh_reg_ = -1;
+    w16_holds_armed_ = w16_holds_fresh_;
+    w16_holds_fresh_ = nullptr;
+  }
+
+  // Only the immediately following instruction may consume w16.
+  void DeclareW16Holds(const hir::Value* value) { w16_holds_fresh_ = value; }
+  bool W16Holds(const hir::Value* value) const {
+    return value && w16_holds_armed_ == value;
+  }
 
   void MarkSourceOffset(const hir::Instr* i);
 
@@ -128,6 +172,7 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
 
   void Call(const hir::Instr* instr, GuestFunction* function);
   void CallIndirect(const hir::Instr* instr, int reg_index);
+  void EmitEncodedIndirectionLookup();
   void CallExtern(const hir::Instr* instr, const Function* function);
   // Emits a PPC __savegprlr_N/__restgprlr_N helper body inline instead of
   // calling it. Returns false when the callee is not a GPR saverest helper.
@@ -151,13 +196,31 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   void PopStackpoint();
   void EnsureSynchronizedGuestAndHostStack();
 
-  static void HandleStackpointOverflowError(ppc::PPCContext* context);
-
+  void MergeFpcrModeAfterConditional(FPCRMode skip_path_mode) {
+    if (fpcr_mode_ != skip_path_mode) {
+      fpcr_mode_ = FPCRMode::Unknown;
+    }
+  }
+  FPCRMode fpcr_mode() const { return fpcr_mode_; }
   void ForgetFpcrMode() {
     if (IsVmxFpcrMode(fpcr_mode_)) {
       ChangeFpcrMode(FPCRMode::Fpu);
     }
     fpcr_mode_ = FPCRMode::Unknown;
+  }
+  // For cold paths whose host call clobbered the mode the tracker still holds.
+  void ReloadFpcrMode(FPCRMode mode) {
+    fpcr_mode_ = FPCRMode::Unknown;
+    ChangeFpcrMode(mode);
+    fpcr_mode_ = mode;
+  }
+  // Unknown may be VMX at runtime, but only in a function that touches VEC128.
+  void EnsureFpuFpcrModeForTransition() {
+    if (IsVmxFpcrMode(fpcr_mode_) ||
+        (fpcr_mode_ == FPCRMode::Unknown && function_has_vmx_)) {
+      ChangeFpcrMode(FPCRMode::Fpu);
+    }
+    fpcr_mode_ = FPCRMode::Fpu;
   }
   bool ChangeFpcrMode(FPCRMode new_mode, bool already_set = false);
   bool IsFeatureEnabled(uint64_t feature_flag) const {
@@ -231,6 +294,11 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
                  const Xbyak_aarch64::Label& label) {
     CodeGenerator::cbnz(rt, label);
   }
+  // +/-32 KiB only; guard with near_tbz_branches_safe_.
+  void tbnz_near(const Xbyak_aarch64::WReg& rt, uint32_t bit,
+                 const Xbyak_aarch64::Label& label) {
+    CodeGenerator::tbnz(rt, bit, label);
+  }
 
   // Shadow of CodeGenerator::L that records the bind offset so later
   // branches to this label can be emitted in single-instruction form.
@@ -284,6 +352,18 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   Arena source_map_arena_;
 
   size_t stack_size_ = 0;
+  bool near_tail_branches_safe_ = false;
+  // Same, for tbnz's +/-32 KiB reach.
+  bool near_tbz_branches_safe_ = false;
+  // -1 = nothing. `fresh` is shifted into `armed` between instructions.
+  int flags_zero_fresh_reg_ = -1;
+  Xbyak_aarch64::Cond flags_zero_fresh_cond_ = Xbyak_aarch64::NE;
+  Xbyak_aarch64::Cond flags_zero_armed_cond_ = Xbyak_aarch64::NE;
+  bool flags_zero_fresh_is64_ = false;
+  int flags_zero_armed_reg_ = -1;
+  bool flags_zero_armed_is64_ = false;
+  const hir::Value* w16_holds_fresh_ = nullptr;
+  const hir::Value* w16_holds_armed_ = nullptr;
 
   static const uint32_t gpr_reg_map_[GPR_COUNT];
   static const uint32_t vec_reg_map_[VEC_COUNT];
@@ -329,6 +409,24 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   static constexpr int64_t kTestBranchBackwardRange = (1ll << 15) - 8;
 
   FPCRMode fpcr_mode_ = FPCRMode::Unknown;
+  bool function_has_vmx_ = false;
+  // FPCR tracking: lattice {Unknown, Fpu, Vmx, VmxDaz}, meet = same or Unknown.
+  struct IncomingFpcr {
+    FPCRMode meet = FPCRMode::Unknown;
+    uint32_t count = 0;
+  };
+  std::unordered_map<const hir::Block*, uint32_t> expected_preds_;
+  std::unordered_map<const hir::Block*, IncomingFpcr> incoming_fpcr_;
+  std::unordered_map<const hir::Label*, const hir::Block*> label_block_;
+  void RecordIncomingFpcr(const hir::Block* target, FPCRMode mode) {
+    auto& in = incoming_fpcr_[target];
+    if (in.count == 0) {
+      in.meet = mode;
+    } else if (in.meet != mode) {
+      in.meet = FPCRMode::Unknown;
+    }
+    ++in.count;
+  }
   bool synchronize_stack_on_next_instruction_ = false;
 };
 
