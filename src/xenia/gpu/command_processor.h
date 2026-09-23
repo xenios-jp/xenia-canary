@@ -228,6 +228,11 @@ class CommandProcessor {
   // the CPU, so there is nothing to wait for.
   void AwaitMemexportForFence() {}
   void AwaitMemexportForCoherency(uint32_t base_bytes, uint32_t size_bytes) {}
+  // Shadowed by backends that publish shader-done writes on the GPU timeline.
+  // False leaves publication to the existing CPU store below the packet hook.
+  bool TryWriteShaderDoneFence(uint32_t address, uint32_t value) {
+    return false;
+  }
   // Shadowed by backends that hold resolve output in the shared memory buffer
   // (see command_processor_resolve_readwatch.inc), where a coherency request
   // naming a held range is what releases it into guest RAM.

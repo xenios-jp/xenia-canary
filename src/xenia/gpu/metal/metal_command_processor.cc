@@ -1687,6 +1687,78 @@ TraceProfileSample MetalCommandProcessor::EndTraceProfile() {
   return result;
 }
 
+bool MetalCommandProcessor::TryWriteShaderDoneFence(uint32_t address,
+                                                    uint32_t value) {
+  if (!shared_memory_ || !shared_memory_->is_zero_copy()) {
+    return false;
+  }
+  if (!trace_writer_.is_open()) {
+    // The ordered copy would end an open render pass. Nothing in the pass sees
+    // the fence before the pass ends except a later draw of it accessing the
+    // address, which ends the pass first (IssueDraw), so the copy is encoded
+    // when the pass ends, still after the work the fence follows.
+    bool deferred = current_render_encoder_ &&
+                    address <= SharedMemory::kBufferSize - sizeof(value) &&
+                    shared_memory_->RequestRange(address, sizeof(value));
+    if (deferred) {
+      pending_shader_done_fence_ranges_.emplace_back(address >> 2,
+                                                     uint32_t(sizeof(value)));
+      pending_shader_done_fence_values_.push_back(value);
+      shared_memory_->RangeWrittenByGpu(address, sizeof(value));
+    }
+    if (deferred || shared_memory_->WriteGuestMemoryGpuOrdered(address, &value,
+                                                               sizeof(value))) {
+      // The guest may stop submitting commands while polling this fence. The
+      // pending resolve write makes OnPrimaryBufferEnd commit this submission,
+      // and a ring-empty stall commits it in PrepareForWait, so the fence is
+      // published without a submission of its own.
+      copy_resolve_writes_pending_ = true;
+      return true;
+    }
+  }
+  // Trace records read guest RAM immediately. Allocation failure also needs a
+  // safe CPU fallback: never report completion while the GPU still uses RAM.
+  AwaitAllQueueOperationsCompletion();
+  return false;
+}
+
+void MetalCommandProcessor::EncodeDeferredShaderDoneFences() {
+  if (pending_shader_done_fence_values_.empty()) {
+    return;
+  }
+  uint32_t size = uint32_t(pending_shader_done_fence_values_.size() *
+                           sizeof(pending_shader_done_fence_values_[0]));
+  MTL::Buffer* source = nullptr;
+  NS::UInteger source_offset = 0;
+  MTL::BlitCommandEncoder* encoder = nullptr;
+  if (AcquireSpirvArgumentBufferSlice(size, 16, &source, &source_offset)) {
+    encoder = current_command_buffer_->blitCommandEncoder();
+  }
+  if (encoder) {
+    std::memcpy(static_cast<uint8_t*>(source->contents()) + source_offset,
+                pending_shader_done_fence_values_.data(), size);
+    for (size_t i = 0; i < pending_shader_done_fence_ranges_.size(); ++i) {
+      encoder->copyFromBuffer(
+          source, source_offset + i * sizeof(uint32_t),
+          shared_memory_->GetBuffer(),
+          pending_shader_done_fence_ranges_[i].base_address_dwords << 2,
+          sizeof(uint32_t));
+    }
+    encoder->endEncoding();
+  } else {
+    // Publishing early is better than never releasing a guest waiting for it.
+    XELOGE("Metal: couldn't encode shader-done fence writes, storing them now");
+    for (size_t i = 0; i < pending_shader_done_fence_ranges_.size(); ++i) {
+      std::memcpy(
+          memory_->TranslatePhysical(
+              pending_shader_done_fence_ranges_[i].base_address_dwords << 2),
+          &pending_shader_done_fence_values_[i], sizeof(uint32_t));
+    }
+  }
+  pending_shader_done_fence_ranges_.clear();
+  pending_shader_done_fence_values_.clear();
+}
+
 void MetalCommandProcessor::NoteMemexportRangesWritten() {
   if (!shared_memory_ || memexport_ranges_.empty()) {
     return;
@@ -1699,17 +1771,18 @@ void MetalCommandProcessor::NoteMemexportRangesWritten() {
   copy_resolve_writes_pending_ = true;
 }
 
-bool MetalCommandProcessor::DrawOverlapsPendingMemexport(
+bool MetalCommandProcessor::DrawOverlapsPendingWrites(
+    const std::vector<draw_util::MemExportRange>& pending_writes,
     const Shader& vertex_shader, const Shader* pixel_shader,
     const IndexBufferInfo* index_buffer_info) const {
-  if (render_encoder_memexport_ranges_.empty()) {
+  if (pending_writes.empty()) {
     return false;
   }
   auto overlaps = [&](uint32_t base, uint64_t length) {
     if (!length) {
       return false;
     }
-    for (const auto& written : render_encoder_memexport_ranges_) {
+    for (const auto& written : pending_writes) {
       uint64_t written_base = uint64_t(written.base_address_dwords) << 2;
       if (uint64_t(base) < written_base + written.size_bytes &&
           written_base < uint64_t(base) + length) {
@@ -2156,6 +2229,8 @@ void MetalCommandProcessor::WaitForPendingCompletionHandlers() {
 
 void MetalCommandProcessor::ShutdownContext() {
   render_encoder_memexport_ranges_.clear();
+  pending_shader_done_fence_ranges_.clear();
+  pending_shader_done_fence_values_.clear();
   // End any active render encoder before shutdown
   if (current_render_encoder_) {
     current_render_encoder_->endEncoding();
@@ -3180,9 +3255,17 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   if (memexport_used_pixel) {
     draw_util::AddMemExportRanges(regs, *pixel_shader, memexport_ranges_);
   }
+  // Fences written while the pass is open are only stored when it ends.
+  if (current_render_encoder_ && !pending_shader_done_fence_ranges_.empty() &&
+      DrawOverlapsPendingWrites(pending_shader_done_fence_ranges_,
+                                *vertex_shader, pixel_shader,
+                                index_buffer_info)) {
+    EndRenderEncoder();
+  }
   if (UseDxilPath() && current_render_encoder_ &&
-      DrawOverlapsPendingMemexport(*vertex_shader, pixel_shader,
-                                   index_buffer_info)) {
+      DrawOverlapsPendingWrites(render_encoder_memexport_ranges_,
+                                *vertex_shader, pixel_shader,
+                                index_buffer_info)) {
     // Order the export before this draw's accesses by ending the pass.
     EndRenderEncoder();
   }
@@ -5615,6 +5698,7 @@ void MetalCommandProcessor::EndRenderEncoder() {
   }
   render_encoder_has_zpd_visibility_ = false;
   ResetMslRenderEncoderStateCache();
+  EncodeDeferredShaderDoneFences();
 }
 
 void MetalCommandProcessor::ResetRenderEncoderResourceUsage() {

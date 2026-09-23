@@ -1150,6 +1150,10 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_SHD(
       physical_address = writeback_offset;
     }
   }
+  if (COMMAND_PROCESSOR::TryWriteShaderDoneFence(physical_address,
+                                                 data_value)) {
+    return true;
+  }
   xe::store(write_destination, data_value);
   trace_writer_.WriteMemoryWrite(physical_address, 4);
   return true;
