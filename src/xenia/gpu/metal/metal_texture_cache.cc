@@ -1715,8 +1715,14 @@ bool MetalTextureCache::Initialize() {
   null_texture_2d_ = CreateNullTexture2D();
   null_texture_3d_ = CreateNullTexture3D();
   null_texture_cube_ = CreateNullTextureCube();
+  if (null_texture_cube_) {
+    null_texture_cube_array_ = null_texture_cube_->newTextureView(
+        null_texture_cube_->pixelFormat(), MTL::TextureTypeCubeArray,
+        NS::Range::Make(0, 1), NS::Range::Make(0, 6));
+  }
 
-  if (!null_texture_2d_ || !null_texture_3d_ || !null_texture_cube_) {
+  if (!null_texture_2d_ || !null_texture_3d_ || !null_texture_cube_ ||
+      !null_texture_cube_array_) {
     XELOGE("Failed to create null textures");
     return false;
   }
@@ -2016,6 +2022,10 @@ void MetalTextureCache::Shutdown() {
   if (null_texture_3d_) {
     null_texture_3d_->release();
     null_texture_3d_ = nullptr;
+  }
+  if (null_texture_cube_array_) {
+    null_texture_cube_array_->release();
+    null_texture_cube_array_ = nullptr;
   }
   if (null_texture_cube_) {
     null_texture_cube_->release();
@@ -2481,8 +2491,8 @@ void MetalTextureCache::Load3DAs2DViews(const SpirvShader& vertex_shader,
 }
 
 MTL::Texture* MetalTextureCache::GetTextureForBinding(
-    uint32_t fetch_constant, xenos::FetchOpDimension dimension,
-    bool is_signed) {
+    uint32_t fetch_constant, xenos::FetchOpDimension dimension, bool is_signed,
+    bool cube_as_array) {
   static std::array<bool, 32> logged_missing_binding{};
   static std::array<bool, 32> logged_missing_texture{};
 
@@ -2494,7 +2504,7 @@ MTL::Texture* MetalTextureCache::GetTextureForBinding(
       case xenos::FetchOpDimension::k3DOrStacked:
         return null_texture_3d_;
       case xenos::FetchOpDimension::kCube:
-        return null_texture_cube_;
+        return GetNullTextureCube(cube_as_array);
       default:
         return null_texture_2d_;
     }
@@ -2587,7 +2597,7 @@ MTL::Texture* MetalTextureCache::GetTextureForBinding(
       }
     } else {
       result = metal_texture->GetOrCreateView(binding->host_swizzle, dimension,
-                                              is_signed);
+                                              is_signed, cube_as_array);
     }
   }
   return result ? result : get_null_texture_for_dimension();
@@ -3450,7 +3460,8 @@ MetalTextureCache::MetalTexture::~MetalTexture() {
 }
 
 MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreateView(
-    uint32_t host_swizzle, xenos::FetchOpDimension dimension, bool is_signed) {
+    uint32_t host_swizzle, xenos::FetchOpDimension dimension, bool is_signed,
+    bool cube_as_array) {
   if (!metal_texture_) {
     return nullptr;
   }
@@ -3488,8 +3499,10 @@ MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreateView(
   MTL::TextureType view_type = metal_texture_->textureType();
   switch (dimension) {
     case xenos::FetchOpDimension::kCube:
-      // SPIRV-Cross translates cube fetches to non-array cube textures.
-      view_type = MTL::TextureTypeCube;
+      // MSC ForceTextureArray changes the DXIL cube resource interface.
+      // SPIRV-Cross continues to use the original non-array SPIR-V type.
+      view_type =
+          cube_as_array ? MTL::TextureTypeCubeArray : MTL::TextureTypeCube;
       break;
     case xenos::FetchOpDimension::k3DOrStacked:
       view_type = key().dimension == xenos::DataDimension::k3D
@@ -3510,6 +3523,7 @@ MTL::Texture* MetalTextureCache::MetalTexture::GetOrCreateView(
 
   uint64_t view_key = uint64_t(host_swizzle) | (uint64_t(dimension) << 32) |
                       (uint64_t(is_signed) << 40) |
+                      (uint64_t(cube_as_array) << 41) |
                       (uint64_t(view_format) << 48);
   auto found = swizzled_view_cache_.find(view_key);
   if (found != swizzled_view_cache_.end()) {
