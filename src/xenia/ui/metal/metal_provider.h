@@ -10,6 +10,8 @@
 #ifndef XENIA_UI_METAL_METAL_PROVIDER_H_
 #define XENIA_UI_METAL_METAL_PROVIDER_H_
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
 
 #include "xenia/ui/graphics_provider.h"
@@ -18,6 +20,9 @@
 namespace xe {
 namespace ui {
 namespace metal {
+
+class GpuTimingLedger;
+enum class GpuTimingSource : uint32_t;
 
 class MetalProvider : public GraphicsProvider {
  public:
@@ -37,6 +42,13 @@ class MetalProvider : public GraphicsProvider {
 
   static bool IsMetalAPIAvailable();
 
+  // GPU interval timing of submitted command buffers, for trace profiling.
+  // Tracking costs one atomic load while no session is active.
+  bool BeginGpuTiming();
+  std::shared_ptr<GpuTimingLedger> EndGpuTiming();
+  void TrackGpuTiming(MTL::CommandBuffer* buffer, GpuTimingSource source) const;
+  void CancelGpuTiming(MTL::CommandBuffer* buffer) const;
+
  private:
   MetalProvider();
 
@@ -44,6 +56,9 @@ class MetalProvider : public GraphicsProvider {
 
   MTL::Device* device_ = nullptr;
   MTL::CommandQueue* command_queue_ = nullptr;
+  // Atomically published; completion handlers retain the session, not provider.
+  std::shared_ptr<GpuTimingLedger> gpu_timing_;
+  std::atomic<bool> gpu_timing_active_{false};
 };
 
 }  // namespace metal

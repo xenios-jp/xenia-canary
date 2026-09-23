@@ -85,6 +85,9 @@ class MetalPresenter : public Presenter {
 
   Surface::TypeFlags GetSupportedSurfaceTypes() const override;
   bool CaptureGuestOutput(RawImage& image_out) override;
+  uint64_t guest_output_submission_count() const {
+    return guest_output_submission_counter_.load(std::memory_order_relaxed);
+  }
 
   bool CopyTextureToGuestOutput(MTL::Texture* source_texture, id dest_texture,
                                 uint32_t source_width, uint32_t source_height,

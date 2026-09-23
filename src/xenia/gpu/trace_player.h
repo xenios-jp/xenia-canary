@@ -45,8 +45,16 @@ class TracePlayer : public TraceReader {
   void SeekCommand(int target_command);
   // Plays a frame up to one command, continuing from the previous frame.
   void PlayFramePrefix(int target_frame, int target_command);
+  // Plays only the given commands of a frame.
+  bool PlayCommandRange(int target_frame, int first_command, int last_command);
 
   void WaitOnPlayback();
+  // Makes the next SeekFrame start from the beginning of the trace. Playback
+  // must be idle.
+  void RewindPlayback() {
+    current_frame_index_ = -1;
+    current_command_index_ = -1;
+  }
 
  private:
   void PlayTrace(const uint8_t* trace_data, size_t trace_size,

@@ -89,6 +89,22 @@ void TracePlayer::SeekCommand(int target_command) {
   }
 }
 
+bool TracePlayer::PlayCommandRange(int target_frame, int first_command,
+                                   int last_command) {
+  if (target_frame < 0 || target_frame >= frame_count() || first_command < 0 ||
+      last_command < first_command ||
+      size_t(last_command) >= frame(target_frame)->commands.size()) {
+    return false;
+  }
+  current_frame_index_ = target_frame;
+  current_command_index_ = last_command;
+  auto frame = current_frame();
+  const uint8_t* start_ptr = frame->commands[first_command].start_ptr;
+  PlayTrace(start_ptr, frame->commands[last_command].end_ptr - start_ptr,
+            TracePlaybackMode::kBreakOnSwap, false);
+  return true;
+}
+
 void TracePlayer::WaitOnPlayback() {
   xe::threading::Wait(playback_event_.get(), true);
 }

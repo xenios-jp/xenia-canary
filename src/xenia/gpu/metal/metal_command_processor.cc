@@ -55,6 +55,7 @@
 #include "xenia/gpu/xenos.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/user_module.h"
+#include "xenia/ui/metal/gpu_timing_ledger.h"
 #include "xenia/ui/metal/metal_presenter.h"
 
 #ifndef DISPATCH_DATA_DESTRUCTOR_NONE
@@ -772,6 +773,9 @@ MetalCommandProcessor::EnsureTranslationSpirv(
     // while they are still half-written. The mutex orders it.
     return ShaderCompileStatus::kPending;
   }
+  if (auto profile = trace_profile()) {
+    profile->Add(TraceCount::kShaderTranslations);
+  }
   if (!translator.TranslateAnalyzedShader(*translation)) {
     XELOGE("Metal: failed to translate shader {:016X} mod {:016X} to SPIR-V",
            translation->shader().ucode_data_hash(),
@@ -783,6 +787,10 @@ MetalCommandProcessor::EnsureTranslationSpirv(
 
 bool MetalCommandProcessor::CompileHostShader(Shader::Translation* translation,
                                               bool is_ios) {
+  if (auto profile = trace_profile()) {
+    profile->Add(TraceCount::kHostShaderCompiles);
+  }
+
   if (!translation) {
     return false;
   }
@@ -1036,6 +1044,10 @@ void MetalCommandProcessor::ApplyColorAttachmentState(
 
 MTL::RenderPipelineState* MetalCommandProcessor::CreatePipelineState(
     const PipelineCompileRequest& request, std::string* error_out) {
+  if (auto profile = trace_profile()) {
+    profile->Add(TraceCount::kPipelineCreations);
+  }
+
   if (error_out) {
     error_out->clear();
   }
@@ -1522,6 +1534,107 @@ uint64_t MetalCommandProcessor::GetCurrentSubmission() const {
 
 uint64_t MetalCommandProcessor::GetCompletedSubmission() const {
   return completed_command_buffers_.load(std::memory_order_acquire);
+}
+
+void MetalCommandProcessor::PrepareTraceProfileReplay() {
+  // A selected range may end before the trace's swap. Retire that frame using
+  // the existing trace-dump path before rewinding, outside all measurements.
+  if (frame_open_) {
+    ForceIssueSwap();
+  }
+  AwaitAsyncCompiles();
+  AwaitAllQueueOperationsCompletion();
+  // Initial register snapshots may bypass WriteRegister callbacks. Rebuild
+  // derived constant and fetch state while retaining compiled shader caches.
+  msl_float_constants_dirty_vertex_ = true;
+  msl_float_constants_dirty_pixel_ = true;
+  msl_bool_loop_constants_dirty_ = true;
+  msl_fetch_constants_dirty_ = true;
+  // The Metal override clears sampler/scaled-resolve caches, not the base
+  // texture map. Both need fresh contents for an independent replay pass.
+  texture_cache_->TextureCache::ClearCache();
+  texture_cache_->ClearCache();
+  shared_memory_->InvalidateAllPages();
+  texture_cache_->TextureFetchConstantsWritten(0, 31);
+}
+
+bool MetalCommandProcessor::BeginTraceProfile(bool reset_state) {
+  if (trace_profile()) {
+    return false;
+  }
+  if (reset_state) {
+    PrepareTraceProfileReplay();
+  } else {
+    AwaitAsyncCompiles();
+    AwaitAllQueueOperationsCompletion();
+  }
+  if (!GetMetalProvider().BeginGpuTiming()) {
+    return false;
+  }
+  // Guest memory written by a selected command range is part of its
+  // verification.
+  std::atomic_store(&trace_profile_,
+                    std::make_shared<TraceProfileStats>(!reset_state));
+  trace_profile_enabled_.store(true, std::memory_order_release);
+  // Each replay pass must independently detect whether its trace supplies a
+  // swap.
+  saw_swap_ = false;
+  for (size_t i = 0; i < kCommandBufferKindCount; ++i) {
+    trace_profile_buffer_baseline_[i] = command_buffer_kind_counts_[i];
+  }
+  auto* presenter =
+      static_cast<ui::metal::MetalPresenter*>(graphics_system_->presenter());
+  trace_profile_presenter_baseline_ =
+      presenter ? presenter->guest_output_submission_count() : 0;
+  trace_profile_cpu_start_ = TraceThreadCpuNs();
+  trace_profile_process_start_ = TraceProcessCpuNs();
+  trace_profile_wall_start_ = TraceWallNs();
+  return true;
+}
+
+TraceProfileSample MetalCommandProcessor::EndTraceProfile() {
+  TraceProfileSample result;
+  if (!trace_profile()) {
+    return result;
+  }
+  AwaitAsyncCompiles();
+  const uint64_t cpu_end = TraceThreadCpuNs();
+  const uint64_t process_end = TraceProcessCpuNs();
+  const uint64_t wall_end = TraceWallNs();
+  trace_profile_enabled_.store(false, std::memory_order_release);
+  auto stats = std::atomic_exchange(&trace_profile_,
+                                    std::shared_ptr<TraceProfileStats>());
+  AwaitAllQueueOperationsCompletion();
+  ui::metal::GpuTimingLedger::Result gpu;
+  if (auto timing = GetMetalProvider().EndGpuTiming()) {
+    timing->Wait(std::chrono::seconds(30));
+    gpu = timing->Snapshot();
+  }
+  result.command_thread_cpu_ns = cpu_end - trace_profile_cpu_start_;
+  result.process_cpu_ns = process_end - trace_profile_process_start_;
+  result.replay_wall_ns = wall_end - trace_profile_wall_start_;
+  result.gpu_drain_wall_ns = TraceWallNs() - wall_end;
+  result.gpu_buffer_duration_sum_ns = gpu.duration_sum_ns;
+  result.gpu_buffer_interval_union_ns = gpu.interval_union_ns;
+  // Every command buffer submitted during the pass has to have been timed.
+  uint64_t backend_buffers = 0;
+  for (size_t i = 0; i < kCommandBufferKindCount; ++i) {
+    backend_buffers +=
+        command_buffer_kind_counts_[i] - trace_profile_buffer_baseline_[i];
+  }
+  auto* presenter =
+      static_cast<ui::metal::MetalPresenter*>(graphics_system_->presenter());
+  const uint64_t presenter_copies =
+      presenter ? presenter->guest_output_submission_count() -
+                      trace_profile_presenter_baseline_
+                : 0;
+  using ui::metal::GpuTimingSource;
+  result.accounting_valid =
+      trace_profile_cpu_start_ && trace_profile_process_start_ && gpu.valid() &&
+      gpu.buffers[size_t(GpuTimingSource::kBackend)] == backend_buffers &&
+      gpu.buffers[size_t(GpuTimingSource::kPresenterCopy)] == presenter_copies;
+  result.stats = stats->Snapshot();
+  return result;
 }
 
 void MetalCommandProcessor::MarkResolvedMemory(uint32_t base_ptr,
@@ -2740,12 +2853,16 @@ void MetalCommandProcessor::DiscardAccountedCommandBuffer(
     MTL::CommandBuffer* command_buffer, CommandBufferKind kind) {
   if (command_buffer) {
     --command_buffer_kind_counts_[size_t(kind)];
+    GetMetalProvider().CancelGpuTiming(command_buffer);
     pending_completion_handlers_.fetch_sub(1, std::memory_order_release);
   }
 }
 
 void MetalCommandProcessor::AddGpuTimeHandler(
     MTL::CommandBuffer* command_buffer) {
+  GetMetalProvider().TrackGpuTiming(command_buffer,
+                                    ui::metal::GpuTimingSource::kBackend);
+
   pending_completion_handlers_.fetch_add(1, std::memory_order_relaxed);
   command_buffer->addCompletedHandler([this](MTL::CommandBuffer* completed) {
     double gpu_seconds = completed->GPUEndTime() - completed->GPUStartTime();
@@ -3008,6 +3125,11 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                                       uint32_t index_count,
                                       IndexBufferInfo* index_buffer_info,
                                       bool major_mode_explicit) {
+  auto profile = trace_profile();
+  if (profile) {
+    profile->Add(TraceCount::kDrawRequests);
+  }
+
   SCOPE_profile_cpu_f("gpu");
   const RegisterFile& regs = *register_file_;
   uint32_t normalized_color_mask = 0;
@@ -3137,9 +3259,13 @@ bool MetalCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
   }
 
   if (UseDxilPath()) {
-    return IssueDrawDxil(vertex_shader, pixel_shader,
-                         primitive_processing_result, primitive_polygonal,
-                         memexport_used, normalized_color_mask, regs);
+    bool ok = IssueDrawDxil(vertex_shader, pixel_shader,
+                            primitive_processing_result, primitive_polygonal,
+                            memexport_used, normalized_color_mask, regs);
+    if (!ok && profile) {
+      profile->Add(TraceCount::kDrawFailures);
+    }
+    return ok;
   }
 
   if (!EnsureSpirvUniformBufferCapacity()) {
@@ -3216,7 +3342,11 @@ bool MetalCommandProcessor::RequestDrawSharedMemoryRanges(
           base_bytes, memexport_range.size_bytes);
       return false;
     }
+    if (auto profile = trace_profile()) {
+      profile->MemoryWrite(base_bytes, memexport_range.size_bytes);
+    }
   }
+
   return true;
 }
 
@@ -5161,11 +5291,22 @@ bool MetalCommandProcessor::IssueDrawDxil(
     NoteMemexportRangesWritten();
   }
 
+  if (auto profile = trace_profile()) {
+    profile->Add(TraceCount::kDxilDraws);
+    if (memexport_used) {
+      profile->Add(TraceCount::kMemexportDraws);
+    }
+  }
   ++current_draw_index_;
   return true;
 }
 
 bool MetalCommandProcessor::IssueCopy() {
+  auto profile = trace_profile();
+  if (profile) {
+    profile->Add(TraceCount::kResolveRequests);
+  }
+
   SCOPE_profile_cpu_f("gpu");
   // Finish any in-flight rendering so render target contents are visible to
   // resolve logic.
@@ -5245,6 +5386,9 @@ bool MetalCommandProcessor::IssueCopy() {
   // Track this region so a later draw sampling it as a texture is split off the
   // command buffer that wrote it.
   MarkResolvedMemory(written_address, written_length);
+  if (profile) {
+    profile->MemoryWrite(written_address, written_length);
+  }
   // The resolve overwrote any export output here, so no fence need await it.
   ClearMemexportPages(written_address, written_length);
 

@@ -20,6 +20,7 @@
 #include "xenia/base/logging.h"
 #include "xenia/gpu/shaders/bytecode/metal/apply_gamma_pwl_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/apply_gamma_table_cs.h"
+#include "xenia/ui/metal/gpu_timing_ledger.h"
 #include "xenia/ui/metal/metal_provider.h"
 #include "xenia/ui/shaders/bytecode/metal/guest_output_bilinear_dither_ps.h"
 #include "xenia/ui/shaders/bytecode/metal/guest_output_bilinear_ps.h"
@@ -269,6 +270,8 @@ bool MetalPresenter::CaptureGuestOutput(RawImage& image_out) {
 
   [blit_encoder endEncoding];
 
+  provider_->TrackGpuTiming((__bridge MTL::CommandBuffer*)copy_command_buffer,
+                            GpuTimingSource::kPresenterCopy);
   [copy_command_buffer commit];
   [copy_command_buffer waitUntilCompleted];
 
@@ -1245,6 +1248,8 @@ bool MetalPresenter::CopyTextureToGuestOutput(MTL::Texture* source_texture, id d
   if (shared_event_) {
     [copy_command_buffer encodeSignalEvent:(id<MTLSharedEvent>)shared_event_ value:submission_id];
   }
+  provider_->TrackGpuTiming((__bridge MTL::CommandBuffer*)copy_command_buffer,
+                            GpuTimingSource::kPresenterCopy);
 
   // Cast dest_texture to proper Metal texture type
   id<MTLTexture> dest_metal_texture = (id<MTLTexture>)dest_texture;
