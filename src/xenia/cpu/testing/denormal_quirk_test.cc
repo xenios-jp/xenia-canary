@@ -13,7 +13,6 @@
 #include <cstring>
 
 #include "xenia/cpu/compiler/passes/simplification_pass.h"
-#include "xenia/cpu/ppc/ppc_emit.h"
 
 using namespace xe::cpu::hir;
 using namespace xe::cpu;
@@ -121,8 +120,7 @@ TEST_CASE("DENORMAL_QUIRK_CONSTANT_OPERAND", "[instr]") {
 TEST_CASE("DENORMAL_QUIRK_FOLD", "[instr]") {
   // Widened singles and normal constants can never be double denormals.
   REQUIRE(SimplifiesAway([](HIRBuilder& b) {
-    Value* single =
-        ppc::UnpackSingleKeepNaN(b, b.Truncate(LoadGPR(b, 1), INT32_TYPE));
+    Value* single = b.UnpackSingle(b.Truncate(LoadGPR(b, 1), INT32_TYPE));
     StoreGPR(b, 3,
              b.ZeroExtend(
                  b.DenormalQuirk(single, b.Neg(single), F64Constant(b, kOne)),
@@ -145,8 +143,7 @@ TEST_CASE("DENORMAL_QUIRK_FOLD", "[instr]") {
     b.Return();
   }));
   REQUIRE_FALSE(SimplifiesAway([](HIRBuilder& b) {
-    Value* single =
-        ppc::UnpackSingleKeepNaN(b, b.Truncate(LoadGPR(b, 1), INT32_TYPE));
+    Value* single = b.UnpackSingle(b.Truncate(LoadGPR(b, 1), INT32_TYPE));
     StoreGPR(
         b, 3,
         b.ZeroExtend(b.DenormalQuirk(single, F64Constant(b, kDenormal), single),

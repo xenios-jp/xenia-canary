@@ -447,6 +447,70 @@ struct TOSINGLE_F64_F64
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_TO_SINGLE, TOSINGLE_F64_F64);
+
+// ============================================================================
+// OPCODE_UNPACK_SINGLE
+// ============================================================================
+// lfs widens without quieting, so only a signaling NaN needs the quiet bit the
+// host convert set cleared again.
+struct UNPACK_SINGLE
+    : Sequence<UNPACK_SINGLE, I<OPCODE_UNPACK_SINGLE, F64Op, I32Op>> {
+  static void Emit(X64Emitter& e, const EmitArgType& i) {
+    e.ChangeMxcsrMode(MXCSRMode::Fpu);
+    if (i.src1.is_constant) {
+      e.mov(e.eax, i.src1.constant());
+    } else {
+      e.mov(e.eax, i.src1);
+    }
+    e.vmovd(e.xmm0, e.eax);
+    e.vcvtss2sd(i.dest, e.xmm0);
+
+    Xbyak::Label done;
+    // An all-ones exponent is a NaN or an infinity; an infinity's bit 51 is
+    // already clear.
+    e.mov(e.edx, e.eax);
+    e.and_(e.edx, 0x7FFFFFFFu);
+    e.cmp(e.edx, 0x7F800000u);
+    e.jb(done);
+    // A quiet NaN already has the bit the convert set.
+    e.test(e.eax, 1u << 22);
+    e.jnz(done);
+    e.vmovq(e.rdx, i.dest);
+    e.btr(e.rdx, 51);
+    e.vmovq(i.dest, e.rdx);
+    e.L(done);
+  }
+};
+EMITTER_OPCODE_TABLE(OPCODE_UNPACK_SINGLE, UNPACK_SINGLE);
+
+// ============================================================================
+// OPCODE_PACK_SINGLE
+// ============================================================================
+// stfs narrows without quieting: a NaN gets the double's quiet bit back.
+struct PACK_SINGLE
+    : Sequence<PACK_SINGLE, I<OPCODE_PACK_SINGLE, I32Op, F64Op>> {
+  static void Emit(X64Emitter& e, const EmitArgType& i) {
+    e.ChangeMxcsrMode(MXCSRMode::Fpu);
+    Xbyak::Xmm src = GetInputRegOrConstant(e, i.src1, e.xmm1);
+    e.vcvtsd2ss(e.xmm0, src);
+    e.vmovd(i.dest, e.xmm0);
+
+    Xbyak::Label done;
+    e.vmovq(e.rax, src);
+    e.mov(e.rdx, e.rax);
+    // AND r64 only takes a sign-extended imm32, so clear the sign with BTR.
+    e.btr(e.rdx, 63);
+    e.mov(e.rcx, 0x7FF0000000000000ull);
+    e.cmp(e.rdx, e.rcx);
+    e.jbe(done);
+    e.shr(e.rax, 51 - 22);
+    e.and_(e.eax, 1u << 22);
+    e.and_(i.dest, ~(1u << 22));
+    e.or_(i.dest, e.eax);
+    e.L(done);
+  }
+};
+EMITTER_OPCODE_TABLE(OPCODE_PACK_SINGLE, PACK_SINGLE);
 // ============================================================================
 // OPCODE_ROUND
 // ============================================================================

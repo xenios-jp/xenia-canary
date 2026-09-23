@@ -1387,6 +1387,8 @@ static bool IsNeverF64Denormal(hir::Value* v, int depth) {
     case OPCODE_TO_SINGLE:
       // Under --no_round_to_single the x64 TO_SINGLE is an identity.
       return !cvars::no_round_to_single;
+    case OPCODE_UNPACK_SINGLE:
+      return true;
     case OPCODE_CONVERT:
       return def->src1.value && def->src1.value->type == FLOAT32_TYPE;
     case OPCODE_SELECT:

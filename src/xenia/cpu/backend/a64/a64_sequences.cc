@@ -4807,6 +4807,82 @@ struct TOSINGLE : Sequence<TOSINGLE, I<OPCODE_TO_SINGLE, F64Op, F64Op>> {
 EMITTER_OPCODE_TABLE(OPCODE_TO_SINGLE, TOSINGLE);
 
 // ============================================================================
+// OPCODE_UNPACK_SINGLE
+// ============================================================================
+// lfs widens without quieting, so the only value the host convert gets wrong
+// is a signaling NaN, and only in the quiet bit it forces on. The convert's
+// own result says whether the input was a NaN, and the fixup sits in the tail.
+struct UNPACK_SINGLE
+    : Sequence<UNPACK_SINGLE, I<OPCODE_UNPACK_SINGLE, F64Op, I32Op>> {
+  static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
+    WReg src = i.src1.is_constant ? e.w0 : WReg(i.src1.reg().getIdx());
+    if (i.src1.is_constant) {
+      e.mov(e.w0, static_cast<uint64_t>(i.src1.constant()));
+    }
+    const DReg dest = i.dest;
+    e.fmov(SReg(dest.getIdx()), src);
+    e.fcvt(dest, SReg(dest.getIdx()));
+    e.fcmp(dest, dest);
+
+    auto& done = e.NewCachedLabel();
+    auto& snan_fixup =
+        e.AddToTail([src, dest, &done](A64Emitter& e, Xbyak_aarch64::Label&) {
+          // A quiet NaN already has the bit the convert set.
+          e.tbnz(src, 22, done);
+          e.fmov(e.x17, dest);
+          e.and_(e.x17, e.x17, ~(1ull << 51));
+          e.fmov(dest, e.x17);
+          e.b(done);
+        });
+    e.b(VS, snan_fixup);
+    e.L(done);
+  }
+};
+EMITTER_OPCODE_TABLE(OPCODE_UNPACK_SINGLE, UNPACK_SINGLE);
+
+// ============================================================================
+// OPCODE_PACK_SINGLE
+// ============================================================================
+// The stfs direction: the double is tested in place with fcmp, and only a NaN
+// takes the tail to carry its signaling bit across.
+struct PACK_SINGLE
+    : Sequence<PACK_SINGLE, I<OPCODE_PACK_SINGLE, I32Op, F64Op>> {
+  static void Emit(A64Emitter& e, const EmitArgType& i) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
+    DReg src = i.src1.is_constant ? e.d0 : DReg(i.src1.reg().getIdx());
+    if (i.src1.is_constant) {
+      union {
+        double d;
+        uint64_t u;
+      } c;
+      c.d = i.src1.constant();
+      e.mov(e.x0, c.u);
+      e.fmov(e.d0, e.x0);
+    }
+    const WReg dest = i.dest;
+    e.fcvt(e.s1, src);
+    e.fmov(dest, e.s1);
+    e.fcmp(src, src);
+
+    auto& done = e.NewCachedLabel();
+    auto& snan_fixup =
+        e.AddToTail([src, dest, &done](A64Emitter& e, Xbyak_aarch64::Label&) {
+          // The convert forced the single's quiet bit on; copy the double's.
+          e.fmov(e.x17, src);
+          e.lsr(e.x17, e.x17, 51 - 22);
+          e.and_(e.w17, e.w17, uint64_t(1u << 22));
+          e.and_(dest, dest, uint64_t(~(1u << 22)));
+          e.orr(dest, dest, e.w17);
+          e.b(done);
+        });
+    e.b(VS, snan_fixup);
+    e.L(done);
+  }
+};
+EMITTER_OPCODE_TABLE(OPCODE_PACK_SINGLE, PACK_SINGLE);
+
+// ============================================================================
 // OPCODE_SET_NJM
 // ============================================================================
 struct SET_NJM : Sequence<SET_NJM, I<OPCODE_SET_NJM, VoidOp, I8Op>> {
