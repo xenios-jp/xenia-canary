@@ -99,6 +99,11 @@ class SpirvShaderTranslator : public ShaderTranslator {
       // in SPIR-V the spacing lives in the domain shader). Discrete uses equal
       // spacing, continuous and adaptive use fractional even.
       xenos::TessellationMode tessellation_mode : 2;
+      // Bits 36-43 are reserved for session-local memexport format profiles
+      // (memexport_format_profile.h). Do not add vertex fields in this range.
+      // These bits have different meanings in PixelShaderModification.
+      uint32_t memexport_format_specialized : 1;
+      uint32_t memexport_format_slot : 7;
     } vertex;
     struct PixelShaderModification {
       // uint32_t 0.
@@ -674,9 +679,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
       const ParsedVertexFetchInstruction& instr) override;
   void ProcessTextureFetchInstruction(
       const ParsedTextureFetchInstruction& instr) override;
-  void ProcessAluInstruction(
-      const ParsedAluInstruction& instr,
-      uint8_t memexport_eM_potentially_written_before) override;
+  void ProcessAluInstruction(const ParsedAluInstruction& instr,
+                             uint8_t memexport_eM_potentially_written_before,
+                             uint32_t instruction_address) override;
 
  private:
   struct TextureBinding {
