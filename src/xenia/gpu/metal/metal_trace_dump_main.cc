@@ -20,6 +20,8 @@
 #include "xenia/ui/metal/metal_api.h"
 #include "xenia/ui/metal/metal_provider.h"
 
+DECLARE_bool(shared_memory_zero_copy);
+
 DEFINE_string(
     metal_trace_dump_capture, "",
     "Path of a .gputrace to write around the replayed frame. Empty takes no "
@@ -33,6 +35,16 @@ namespace metal {
 class MetalTraceDump : public TraceDump {
  public:
   std::unique_ptr<gpu::GraphicsSystem> CreateGraphicsSystem() override {
+    // Playback restores recorded RAM on the CPU while preceding draws may
+    // still be queued. A bytes-no-copy buffer would expose those later bytes
+    // to earlier draws. This applies only to this tool, before the shared
+    // buffer is created.
+    if (cvars::shared_memory_zero_copy) {
+      XELOGI(
+          "Metal trace replay: disabling zero-copy guest RAM for ordered "
+          "snapshot restoration");
+      cvars::shared_memory_zero_copy = false;
+    }
     return std::unique_ptr<gpu::GraphicsSystem>(new MetalGraphicsSystem());
   }
 
