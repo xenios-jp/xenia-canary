@@ -362,23 +362,36 @@ inline XReg AddGuestMemoryOffset(A64Emitter& e, const XReg& base,
 // vreg must not equal sa or sb.
 // This is needed because FPCR.FZ may not flush denormal inputs on all ARM64
 // implementations (the ARM spec says input flushing is implementation-defined).
+inline void LoadDenormalThreshold_V128(A64Emitter& e, int k) {
+  e.movi(VReg(k).s4, 0x1, LSL, 24);
+}
+
+// Flushes with the threshold already in k. vreg must equal neither k nor t.
+inline void FlushDenormalsWithK_V128(A64Emitter& e, int vreg, int k, int t) {
+  e.shl(VReg(t).s4, VReg(vreg).s4, 1);
+  e.cmhi(VReg(t).s4, VReg(k).s4,
+         VReg(t).s4);                 // mask: all-1s for denormal-or-zero lanes
+  e.ushr(VReg(t).s4, VReg(t).s4, 1);  // clear bit 31: preserve the sign
+  e.bic(VReg(vreg).b16, VReg(vreg).b16, VReg(t).b16);
+}
+
+// Hardware flushes vector denormals only with VSCR.NJ set, so the software
+// flushes are skipped at run time when it is clear. w17 is free in every
+// vector FP sequence.
+inline void EmitSkipFlushUnlessNJM(A64Emitter& e, Xbyak_aarch64::Label& skip) {
+  e.ldr(e.w17, Xbyak_aarch64::ptr(e.x19, static_cast<uint32_t>(offsetof(
+                                             A64BackendContext, flags))));
+  e.tbz(e.w17, kA64BackendNJMOn, skip);
+}
+
+// vreg must not equal sa or sb.
 inline void FlushDenormals_V128(A64Emitter& e, int vreg, int sa = 2,
                                 int sb = 3) {
-  // val<<1 removes the sign bit and doubles the value.
-  // Denormals become [0x00000002, 0x00FFFFFE]; zeros become 0x00000000.
-  // (val<<1) - 1: wraps 0→0xFFFFFFFF (excluded),
-  // denorms→[0x00000001,0x00FFFFFD]. Denormal iff ((val<<1) - 1) < 0x00FFFFFF
-  // (unsigned).
-  e.shl(VReg(sa).s4, VReg(vreg).s4, 1);
-  e.movi(VReg(sb).s4, 1u);
-  e.sub(VReg(sa).s4, VReg(sa).s4, VReg(sb).s4);
-  e.mvni(VReg(sb).s4, 0xFFu, LSL, 24);  // 0x00FFFFFF
-  e.cmhi(VReg(sb).s4, VReg(sb).s4,
-         VReg(sa).s4);  // mask: all-1s for denormal lanes
-  // Clear only bits 30:0 (preserve sign bit 31) so -denormal → -0, +denormal →
-  // +0.
-  e.ushr(VReg(sa).s4, VReg(sb).s4, 1);  // sa = mask with bit 31 cleared
-  e.bic(VReg(vreg).b16, VReg(vreg).b16, VReg(sa).b16);
+  Xbyak_aarch64::Label no_flush;
+  EmitSkipFlushUnlessNJM(e, no_flush);
+  LoadDenormalThreshold_V128(e, sa);
+  FlushDenormalsWithK_V128(e, vreg, sa, sb);
+  e.L(no_flush);
 }
 
 // Fixup for vmaxfp/vminfp NaN lanes.
@@ -417,8 +430,12 @@ inline void PrepareVmxFpSources(A64Emitter& e, const T1& op1, const T2& op2,
   }
   // Flush denormal inputs in software only if FPCR.FZ doesn't handle it.
   if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
-    FlushDenormals_V128(e, 0);
-    FlushDenormals_V128(e, 1);
+    Xbyak_aarch64::Label no_flush;
+    EmitSkipFlushUnlessNJM(e, no_flush);
+    LoadDenormalThreshold_V128(e, 2);
+    FlushDenormalsWithK_V128(e, 0, 2, 3);
+    FlushDenormalsWithK_V128(e, 1, 2, 3);
+    e.L(no_flush);
   }
   out_s1 = 0;
   out_s2 = 1;
@@ -467,9 +484,20 @@ inline void PrepareVmxFmaSources(A64Emitter& e, const T1& op1, const T2& op2,
     e.mov(VReg(3).b16, VReg(s3).b16);
   }
   if (!e.IsFeatureEnabled(xe::arm64::kA64FZFlushesInputs)) {
-    FlushDenormals_V128(e, 0, 2, tmp);
-    FlushDenormals_V128(e, 1, 2, tmp);
-    FlushDenormals_V128(e, 3, 2, tmp);
+    // accurate_vmx_denormal_flush pins the input flush on; the output flush
+    // stays NJ-gated, which is harmless since VmxDaz flushes outputs.
+    Xbyak_aarch64::Label no_flush;
+    const bool gate_on_njm = !cvars::accurate_vmx_denormal_flush;
+    if (gate_on_njm) {
+      EmitSkipFlushUnlessNJM(e, no_flush);
+    }
+    LoadDenormalThreshold_V128(e, 2);
+    FlushDenormalsWithK_V128(e, 0, 2, tmp);
+    FlushDenormalsWithK_V128(e, 1, 2, tmp);
+    FlushDenormalsWithK_V128(e, 3, 2, tmp);
+    if (gate_on_njm) {
+      e.L(no_flush);
+    }
   }
 }
 
