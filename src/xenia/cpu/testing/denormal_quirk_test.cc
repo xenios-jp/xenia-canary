@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 
+#include "xenia/cpu/compiler/passes/control_flow_analysis_pass.h"
 #include "xenia/cpu/compiler/passes/simplification_pass.h"
 
 using namespace xe::cpu::hir;
@@ -54,6 +55,9 @@ bool SimplifiesAway(void (*emit)(HIRBuilder& b)) {
   HIRBuilder b;
   b.MakeCurrent();
   emit(b);
+  b.Finalize();
+  compiler::passes::ControlFlowAnalysisPass cfa;
+  cfa.Run(&b);
   compiler::passes::SimplificationPass pass;
   bool changed = false;
   pass.Run(&b, changed);
@@ -148,6 +152,50 @@ TEST_CASE("DENORMAL_QUIRK_FOLD", "[instr]") {
         b, 3,
         b.ZeroExtend(b.DenormalQuirk(single, F64Constant(b, kDenormal), single),
                      INT64_TYPE));
+    b.Return();
+  }));
+}
+
+// The proof follows a widened single through a guest FPR across blocks.
+TEST_CASE("DENORMAL_QUIRK_FOLD_ACROSS_BLOCKS", "[instr]") {
+  REQUIRE(SimplifiesAway([](HIRBuilder& b) {
+    StoreFPR(b, 1, b.UnpackSingle(b.Truncate(LoadGPR(b, 1), INT32_TYPE)));
+    auto label = b.NewLabel();
+    b.BranchTrue(b.Truncate(LoadGPR(b, 2), INT8_TYPE), label);
+    StoreFPR(b, 2, LoadFPR(b, 1));
+    b.MarkLabel(label);
+    Value* f1 = LoadFPR(b, 1);
+    StoreGPR(b, 3, b.ZeroExtend(b.DenormalQuirk(f1, f1, f1), INT64_TYPE));
+    b.Return();
+  }));
+  // Not when one path stores something unproven.
+  REQUIRE_FALSE(SimplifiesAway([](HIRBuilder& b) {
+    StoreFPR(b, 1, b.UnpackSingle(b.Truncate(LoadGPR(b, 1), INT32_TYPE)));
+    auto label = b.NewLabel();
+    b.BranchTrue(b.Truncate(LoadGPR(b, 2), INT8_TYPE), label);
+    StoreFPR(b, 1, LoadFPR(b, 2));
+    b.MarkLabel(label);
+    Value* f1 = LoadFPR(b, 1);
+    StoreGPR(b, 3, b.ZeroExtend(b.DenormalQuirk(f1, f1, f1), INT64_TYPE));
+    b.Return();
+  }));
+  // Nor across a call, which may write any FPR.
+  REQUIRE_FALSE(SimplifiesAway([](HIRBuilder& b) {
+    StoreFPR(b, 1, b.UnpackSingle(b.Truncate(LoadGPR(b, 1), INT32_TYPE)));
+    b.Call(nullptr);
+    Value* f1 = LoadFPR(b, 1);
+    StoreGPR(b, 3, b.ZeroExtend(b.DenormalQuirk(f1, f1, f1), INT64_TYPE));
+    b.Return();
+  }));
+  // Nor around a loop whose body stores something unproven.
+  REQUIRE_FALSE(SimplifiesAway([](HIRBuilder& b) {
+    StoreFPR(b, 1, b.UnpackSingle(b.Truncate(LoadGPR(b, 1), INT32_TYPE)));
+    auto loop = b.NewLabel();
+    b.MarkLabel(loop);
+    Value* f1 = LoadFPR(b, 1);
+    StoreGPR(b, 3, b.ZeroExtend(b.DenormalQuirk(f1, f1, f1), INT64_TYPE));
+    StoreFPR(b, 1, LoadFPR(b, 2));
+    b.BranchTrue(b.Truncate(LoadGPR(b, 2), INT8_TYPE), loop);
     b.Return();
   }));
 }
