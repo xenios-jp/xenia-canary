@@ -130,12 +130,17 @@ void MetalPrimitiveProcessor::BeginFrame() {
   // Clean up old frame index buffers
   ++current_frame_;
   uint64_t current_frame = current_frame_;
+  uint64_t completed_submission = command_processor_.GetCompletedSubmission();
 
   frame_index_buffers_.erase(
       std::remove_if(frame_index_buffers_.begin(), frame_index_buffers_.end(),
-                     [current_frame](const FrameIndexBuffer& buffer) {
-                       // Keep buffers used in the last 2 frames
-                       if (current_frame - buffer.last_frame_used > 2) {
+                     [current_frame,
+                      completed_submission](const FrameIndexBuffer& buffer) {
+                       // Keep buffers used in the last 2 frames, and never
+                       // release one its last submission may still read.
+                       if (current_frame - buffer.last_frame_used > 2 &&
+                           buffer.last_submission_used <=
+                               completed_submission) {
                          if (buffer.buffer) {
                            buffer.buffer->release();
                          }
@@ -153,7 +158,7 @@ void MetalPrimitiveProcessor::EndFrame() {
 }
 
 MTL::Buffer* MetalPrimitiveProcessor::GetConvertedIndexBuffer(
-    size_t handle, uint64_t& offset_bytes_out) const {
+    size_t handle, uint64_t& offset_bytes_out) {
   if (handle >= converted_index_buffers_.size()) {
     XELOGE("Converted index buffer handle {} is out of range {}", handle,
            converted_index_buffers_.size());
@@ -162,6 +167,15 @@ MTL::Buffer* MetalPrimitiveProcessor::GetConvertedIndexBuffer(
   }
 
   const ConvertedIndexBufferBinding& binding = converted_index_buffers_[handle];
+  // Called while the draw reading it is encoded into the current submission.
+  for (FrameIndexBuffer& frame_buffer : frame_index_buffers_) {
+    if (frame_buffer.buffer == binding.buffer) {
+      frame_buffer.last_submission_used =
+          std::max(frame_buffer.last_submission_used,
+                   command_processor_.GetCurrentSubmission());
+      break;
+    }
+  }
   offset_bytes_out = binding.offset_bytes;
   return binding.buffer;
 }
@@ -213,11 +227,15 @@ void* MetalPrimitiveProcessor::RequestHostConvertedIndexBufferForCurrentFrame(
   // Find or create a buffer large enough
   FrameIndexBuffer* chosen_buffer = nullptr;
   uint64_t current_frame = current_frame_;
+  uint64_t completed_submission = command_processor_.GetCompletedSubmission();
 
-  // First try to find an existing buffer that's large enough
+  // First try to find an existing buffer that's large enough, isn't used by
+  // this frame, and whose last submission has completed, since the CPU
+  // rewrites its contents.
   for (auto& frame_buffer : frame_index_buffers_) {
     if (frame_buffer.size >= required_size &&
-        frame_buffer.last_frame_used != current_frame) {
+        frame_buffer.last_frame_used != current_frame &&
+        frame_buffer.last_submission_used <= completed_submission) {
       chosen_buffer = &frame_buffer;
       break;
     }
@@ -246,7 +264,7 @@ void* MetalPrimitiveProcessor::RequestHostConvertedIndexBufferForCurrentFrame(
              allocation_size);
     new_buffer->setLabel(NS::String::string(label, NS::UTF8StringEncoding));
 
-    frame_index_buffers_.push_back({new_buffer, allocation_size, 0});
+    frame_index_buffers_.push_back({new_buffer, allocation_size, 0, 0});
     chosen_buffer = &frame_index_buffers_.back();
 
     XELOGI("Created new Metal index buffer for primitive conversion ({} bytes)",
