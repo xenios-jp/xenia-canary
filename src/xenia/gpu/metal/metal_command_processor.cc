@@ -2232,6 +2232,7 @@ void MetalCommandProcessor::ShutdownContext() {
   render_encoder_memexport_ranges_.clear();
   pending_shader_done_fence_ranges_.clear();
   pending_shader_done_fence_values_.clear();
+  dxil_binder_.ResetUploadCaches();
   // End any active render encoder before shutdown
   if (current_render_encoder_) {
     current_render_encoder_->endEncoding();
@@ -6410,6 +6411,8 @@ bool MetalCommandProcessor::AcquireSpirvArgumentBufferSlice(
 
 void MetalCommandProcessor::ScheduleSpirvArgumentBufferRelease(
     MTL::CommandBuffer* command_buffer) {
+  // Cached addresses become invalid when these pages enter the recycling pool.
+  dxil_binder_.ResetUploadCaches();
   if (!command_buffer || command_buffer_spirv_argbuf_pages_.empty()) {
     return;
   }
