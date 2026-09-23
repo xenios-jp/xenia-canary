@@ -1641,9 +1641,7 @@ void MetalCommandProcessor::PrepareTraceProfileReplay() {
   msl_float_constants_dirty_pixel_ = true;
   msl_bool_loop_constants_dirty_ = true;
   msl_fetch_constants_dirty_ = true;
-  // The Metal override clears sampler/scaled-resolve caches, not the base
-  // texture map. Both need fresh contents for an independent replay pass.
-  texture_cache_->TextureCache::ClearCache();
+  // Clears the texture map too, for fresh contents in an independent pass.
   texture_cache_->ClearCache();
   shared_memory_->InvalidateAllPages();
   texture_cache_->TextureFetchConstantsWritten(0, 31);
