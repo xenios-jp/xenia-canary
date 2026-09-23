@@ -128,6 +128,8 @@ const struct DirectRawLoadFormat {
      xenos::Endian::k8in32},
     {xenos::TextureFormat::k_8_8_8_8, MTL::PixelFormatRGBA8Unorm,
      xenos::Endian::k8in32},
+    {xenos::TextureFormat::k_32_FLOAT, MTL::PixelFormatR32Float,
+     xenos::Endian::k8in32},
 };
 
 #if XE_PLATFORM_IOS
