@@ -6383,6 +6383,8 @@ MTL::Function* MetalRenderTargetCache::GetOrCreateTransferFragmentFunction(
   options.no_discard_stencil =
       ::cvars::no_discard_stencil_in_transfer_pipelines;
   options.fast_pitch_divmod = ::cvars::metal_transfer_fast_divmod;
+  options.branchless_d24_host_depth = true;
+  options.optimize_integer_addressing = true;
 
   MTL::Function* function = nullptr;
   std::vector<uint32_t> spirv = BuildEdramTransferShaderSpirv(key, options);
