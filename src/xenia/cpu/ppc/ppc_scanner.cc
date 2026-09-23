@@ -261,9 +261,11 @@ bool PPCScanner::Scan(GuestFunction* function, FunctionDebugInfo* debug_info) {
 
     address += 4;
     if (end_address && address > end_address) {
-      // Hmm....
+      // The caller's bound comes from the module's function table, so it
+      // outranks the scan that walked past it.
       LOGPPC("Ran over function bounds! {:08X}-{:08X}", start_address,
              end_address);
+      address = end_address;
       break;
     }
   }
