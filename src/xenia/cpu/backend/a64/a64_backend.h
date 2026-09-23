@@ -144,6 +144,7 @@ struct A64BackendContext {
 constexpr unsigned int DEFAULT_FPU_FPCR = 0;
 // Default FPCR for VMX mode (flush to zero, preserve NaN payloads).
 constexpr unsigned int DEFAULT_VMX_FPCR = (1 << 24);  // FZ
+// DN is clear in every FPCR image; the NaN fixups rely on it.
 
 class A64Backend : public Backend {
  public:
