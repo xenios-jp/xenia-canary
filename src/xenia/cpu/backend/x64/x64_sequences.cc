@@ -46,10 +46,6 @@ DEFINE_bool(use_fast_dot_product, false,
             "all infinite results to QNaN.",
             "CPU");
 
-DEFINE_bool(no_round_to_single, false,
-            "Not for users, breaks games. Skip rounding double values to "
-            "single precision and back",
-            "CPU");
 DEFINE_bool(inline_loadclock, false,
             "Directly read cached guest clock without calling the LoadClock "
             "method (it gets repeatedly updated by calls from other threads)",
@@ -636,6 +632,55 @@ struct MAX_V128 : Sequence<MAX_V128, I<OPCODE_MAX, V128Op, V128Op, V128Op>> {
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_MAX, MAX_F32, MAX_F64, MAX_V128);
+
+// ============================================================================
+// OPCODE_DENORMAL_QUIRK
+// ============================================================================
+// quirk = (any operand denormal) && (all operands finite), as i8 0/1.
+struct DENORMAL_QUIRK
+    : Sequence<DENORMAL_QUIRK,
+               I<OPCODE_DENORMAL_QUIRK, I8Op, F64Op, F64Op, F64Op>> {
+  static void Emit(X64Emitter& e, const EmitArgType& i) {
+    const Xmm ops[3] = {GetInputRegOrConstant(e, i.src1, e.xmm0),
+                        GetInputRegOrConstant(e, i.src2, e.xmm1),
+                        GetInputRegOrConstant(e, i.src3, e.xmm2)};
+    // rcx = min(|op| - 1): below 0x000FFFFFFFFFFFFF iff some operand is
+    // denormal. Subtracting one wraps a zero up to the top.
+    for (int k = 0; k < 3; ++k) {
+      const auto& gp = (k == 0) ? e.rcx : e.rax;
+      e.vmovq(gp, ops[k]);
+      e.btr(gp, 63);
+      e.sub(gp, 1);
+      if (k != 0) {
+        e.cmp(e.rax, e.rcx);
+        e.cmovb(e.rcx, e.rax);
+      }
+    }
+    e.mov(e.rax, 0x000FFFFFFFFFFFFFull);
+    e.cmp(e.rcx, e.rax);
+    Xbyak::Label slow, done;
+    e.jb(slow);
+    e.xor_(i.dest.reg().cvt32(), i.dest.reg().cvt32());
+    e.jmp(done);
+
+    // rcx = max(|op|): below infinity iff every operand is finite.
+    e.L(slow);
+    for (int k = 0; k < 3; ++k) {
+      const auto& gp = (k == 0) ? e.rcx : e.rax;
+      e.vmovq(gp, ops[k]);
+      e.btr(gp, 63);
+      if (k != 0) {
+        e.cmp(e.rax, e.rcx);
+        e.cmova(e.rcx, e.rax);
+      }
+    }
+    e.mov(e.rax, 0x7FF0000000000000ull);
+    e.cmp(e.rcx, e.rax);
+    e.setb(i.dest);
+    e.L(done);
+  }
+};
+EMITTER_OPCODE_TABLE(OPCODE_DENORMAL_QUIRK, DENORMAL_QUIRK);
 
 // ============================================================================
 // OPCODE_MIN
