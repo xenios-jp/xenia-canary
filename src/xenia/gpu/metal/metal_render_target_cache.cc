@@ -3487,6 +3487,9 @@ MTL::RenderPipelineState* MetalRenderTargetCache::GetOrCreateEdramLoadPipeline(
   desc->setSampleCount(sample_count);
 
   NS::Error* error = nullptr;
+  if (auto profile = command_processor_.trace_profile()) {
+    profile->Add(TraceCount::kPipelineCreations);
+  }
   MTL::RenderPipelineState* pipeline =
       device_->newRenderPipelineState(desc, &error);
   desc->release();
@@ -6025,6 +6028,9 @@ MTL::RenderPipelineState* MetalRenderTargetCache::GetOrCreateTransferPipelines(
   }
   desc->setSampleCount(sample_count);
 
+  if (auto profile = command_processor_.trace_profile()) {
+    profile->Add(TraceCount::kPipelineCreations);
+  }
   MTL::RenderPipelineState* pipeline =
       device_->newRenderPipelineState(desc, &error);
 
@@ -6241,6 +6247,9 @@ MetalRenderTargetCache::GetOrCreateTransferClearPipeline(
   desc->setStencilAttachmentPixelFormat(key.stencil_attachment_format);
 
   NS::Error* error = nullptr;
+  if (auto profile = command_processor_.trace_profile()) {
+    profile->Add(TraceCount::kPipelineCreations);
+  }
   MTL::RenderPipelineState* pipeline =
       device_->newRenderPipelineState(desc, &error);
 

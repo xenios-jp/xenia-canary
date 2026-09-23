@@ -7,6 +7,7 @@
  ******************************************************************************
  */
 
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -16,11 +17,14 @@
 #include "xenia/base/logging.h"
 #include "xenia/gpu/metal/metal_command_processor.h"
 #include "xenia/gpu/metal/metal_graphics_system.h"
+#include "xenia/gpu/metal/metal_shared_memory.h"
 #include "xenia/gpu/trace_dump.h"
 #include "xenia/ui/metal/metal_api.h"
 #include "xenia/ui/metal/metal_provider.h"
 
 DECLARE_bool(shared_memory_zero_copy);
+DECLARE_bool(async_shader_compilation);
+DECLARE_bool(async_shader_skip_draws);
 
 DEFINE_string(
     metal_trace_dump_capture, "",
@@ -119,7 +123,78 @@ class MetalTraceDump : public TraceDump {
            cvars::metal_trace_dump_capture);
   }
 
+  bool HasTraceProfiling() const override { return true; }
+
+  void PrepareTraceProfileReplay() override {
+    RunOnCommandThread(
+        [&] { command_processor()->PrepareTraceProfileReplay(); });
+  }
+
+  bool BeginTraceProfile(bool reset_state) override {
+    if (!cvars::metal_trace_dump_capture.empty() ||
+        cvars::async_shader_compilation || cvars::async_shader_skip_draws) {
+      XELOGE(
+          "Trace profiling requires no GPU capture and synchronous shader "
+          "compilation");
+      return false;
+    }
+    bool started = false;
+    RunOnCommandThread(
+        [&] { started = command_processor()->BeginTraceProfile(reset_state); });
+    return started;
+  }
+
+  TraceProfileSample EndTraceProfile() override {
+    TraceProfileSample sample;
+    RunOnCommandThread(
+        [&] { sample = command_processor()->EndTraceProfile(); });
+    return sample;
+  }
+
+  // Each range is written as recorded: its address, its length and its bytes,
+  // after the range count.
+  bool ReadTraceProfileMemory(
+      const std::vector<std::pair<uint32_t, uint32_t>>& ranges,
+      std::vector<uint8_t>& bytes) override {
+    MTL::Buffer* buffer = command_processor()->shared_memory()->GetBuffer();
+    if (!buffer || !buffer->contents()) {
+      return ranges.empty();
+    }
+    uint64_t size = sizeof(uint64_t);
+    for (const auto& range : ranges) {
+      if (uint64_t(range.first) + range.second > buffer->length()) {
+        return false;
+      }
+      size += sizeof(uint32_t) * 2 + range.second;
+    }
+    bytes.resize(size);
+    uint64_t count = ranges.size();
+    std::memcpy(bytes.data(), &count, sizeof(count));
+    size_t offset = sizeof(count);
+    const auto* contents = static_cast<const uint8_t*>(buffer->contents());
+    for (const auto& range : ranges) {
+      std::memcpy(bytes.data() + offset, &range.first, sizeof(uint32_t));
+      std::memcpy(bytes.data() + offset + sizeof(uint32_t), &range.second,
+                  sizeof(uint32_t));
+      offset += sizeof(uint32_t) * 2;
+      std::memcpy(bytes.data() + offset, contents + range.first, range.second);
+      offset += range.second;
+    }
+    return true;
+  }
+
+  std::string TraceProfileDevice() override {
+    auto* provider =
+        static_cast<ui::metal::MetalProvider*>(graphics_system_->provider());
+    return provider->GetDevice()->name()->utf8String();
+  }
+
  private:
+  MetalCommandProcessor* command_processor() const {
+    return static_cast<MetalCommandProcessor*>(
+        graphics_system_->command_processor());
+  }
+
   bool capturing_ = false;
 };
 

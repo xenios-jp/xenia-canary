@@ -43,6 +43,7 @@
 #include "xenia/gpu/metal/msl_shader.h"
 #include "xenia/gpu/shader_storage.h"
 #include "xenia/gpu/spirv_shader_translator.h"
+#include "xenia/gpu/trace_profile.h"
 #include "xenia/ui/metal/metal_api.h"
 #include "xenia/ui/metal/metal_provider.h"
 
@@ -98,6 +99,18 @@ class MetalCommandProcessor : public CommandProcessor {
   uint32_t current_draw_index() const { return current_draw_index_; }
   uint64_t GetCurrentSubmission() const;
   uint64_t GetCompletedSubmission() const override;
+  // Trace dump profiling. PrepareTraceProfileReplay resets the texture and
+  // shared memory state while keeping compiled shaders and pipelines.
+  void PrepareTraceProfileReplay();
+  bool BeginTraceProfile(bool reset_state);
+  TraceProfileSample EndTraceProfile();
+  // Null unless a trace profile is being recorded.
+  std::shared_ptr<TraceProfileStats> trace_profile() const {
+    if (!trace_profile_enabled_.load(std::memory_order_relaxed)) {
+      return {};
+    }
+    return std::atomic_load(&trace_profile_);
+  }
   // What a command buffer was created for, to attribute the per-frame count.
   // Submission kinds name what ended the previous one, since that is what
   // forced a new submission to be started.
@@ -886,6 +899,12 @@ class MetalCommandProcessor : public CommandProcessor {
   static constexpr size_t kCommandBufferKindCount =
       size_t(CommandBufferKind::kCount);
   uint64_t command_buffer_kind_counts_[kCommandBufferKindCount] = {};
+  std::atomic<bool> trace_profile_enabled_{false};
+  std::shared_ptr<TraceProfileStats> trace_profile_;
+  uint64_t trace_profile_cpu_start_ = 0, trace_profile_process_start_ = 0;
+  uint64_t trace_profile_wall_start_ = 0;
+  uint64_t trace_profile_presenter_baseline_ = 0;
+  uint64_t trace_profile_buffer_baseline_[kCommandBufferKindCount] = {};
   uint64_t command_buffer_kind_window_start_[kCommandBufferKindCount] = {};
   CommandBufferKind next_submission_kind_ = CommandBufferKind::kSubmissionOther;
   // Each render encoder is a tile store plus an attachment reload on a TBDR

@@ -12,12 +12,57 @@
 #include "third_party/metal-cpp/Metal/Metal.hpp"
 
 #include "xenia/base/logging.h"
+#include "xenia/ui/metal/gpu_timing_ledger.h"
 #include "xenia/ui/metal/metal_immediate_drawer.h"
 #include "xenia/ui/metal/metal_presenter.h"
 
 namespace xe {
 namespace ui {
 namespace metal {
+
+bool MetalProvider::BeginGpuTiming() {
+  std::shared_ptr<GpuTimingLedger> empty;
+  if (!std::atomic_compare_exchange_strong(
+          &gpu_timing_, &empty, std::make_shared<GpuTimingLedger>())) {
+    return false;
+  }
+  gpu_timing_active_.store(true, std::memory_order_release);
+  return true;
+}
+
+std::shared_ptr<GpuTimingLedger> MetalProvider::EndGpuTiming() {
+  gpu_timing_active_.store(false, std::memory_order_release);
+  return std::atomic_exchange(&gpu_timing_, std::shared_ptr<GpuTimingLedger>());
+}
+
+void MetalProvider::TrackGpuTiming(MTL::CommandBuffer* buffer,
+                                   GpuTimingSource source) const {
+  if (!buffer || !gpu_timing_active_.load(std::memory_order_acquire)) {
+    return;
+  }
+  auto session = std::atomic_load(&gpu_timing_);
+  if (!session) {
+    return;
+  }
+  uint64_t token =
+      session->Register(reinterpret_cast<uintptr_t>(buffer), source);
+  if (!token) {
+    return;
+  }
+  buffer->addCompletedHandler([session, token](MTL::CommandBuffer* completed) {
+    session->Complete(token, completed->GPUStartTime(), completed->GPUEndTime(),
+                      completed->status() == MTL::CommandBufferStatusCompleted);
+  });
+}
+
+void MetalProvider::CancelGpuTiming(MTL::CommandBuffer* buffer) const {
+  if (!buffer || !gpu_timing_active_.load(std::memory_order_acquire)) {
+    return;
+  }
+  if (auto session = std::atomic_load(&gpu_timing_)) {
+    session->Cancel(reinterpret_cast<uintptr_t>(buffer));
+  }
+}
 
 bool MetalProvider::IsMetalAPIAvailable() {
   MTL::Device* device = MTL::CreateSystemDefaultDevice();

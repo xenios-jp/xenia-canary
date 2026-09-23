@@ -37,6 +37,8 @@
 #pragma clang diagnostic pop
 #endif
 
+DECLARE_path(trace_profile_path);
+
 DEFINE_path(target_trace_file, "", "Specifies the trace file to load.",
             "GPU.Debug");
 DEFINE_path(trace_dump_path, "", "Output path for dumped files.", "GPU.Debug");
@@ -205,7 +207,16 @@ bool TraceDump::CaptureToPng(const std::filesystem::path& png_path) {
   return true;
 }
 
-int TraceDump::Run() {
+void TraceDump::RunOnCommandThread(const std::function<void()>& function) {
+  threading::Fence fence;
+  graphics_system_->command_processor()->CallInThread([&] {
+    function();
+    fence.Signal();
+  });
+  fence.Wait();
+}
+
+void TraceDump::ReplayFrames() {
   int capture_frame = cvars::trace_dump_capture_frame;
   if (capture_frame < 0) {
     BeginHostCapture();
@@ -241,15 +252,12 @@ int TraceDump::Run() {
       std::filesystem::path edram_path = base_output_path_;
       edram_path.replace_filename(edram_path.stem().concat("_edram.bin"));
       // The dump submits GPU work, so it has to run on the GPU thread.
-      CommandProcessor* command_processor =
-          graphics_system_->command_processor();
       bool edram_written = false;
-      threading::Fence edram_fence;
-      command_processor->CallInThread([&]() {
-        edram_written = command_processor->DumpEdramSnapshotToFile(edram_path);
-        edram_fence.Signal();
+      RunOnCommandThread([&] {
+        edram_written =
+            graphics_system_->command_processor()->DumpEdramSnapshotToFile(
+                edram_path);
       });
-      edram_fence.Wait();
       if (edram_written) {
         XELOGI("TraceDump: wrote the EDRAM snapshot after frame {} command {}",
                i, stop_early ? cvars::trace_dump_stop_command : last_command);
@@ -297,7 +305,13 @@ int TraceDump::Run() {
   if (capture_frame < 0) {
     EndHostCapture();
   }
+}
 
+int TraceDump::Run() {
+  if (!cvars::trace_profile_path.empty()) {
+    return RunProfile();
+  }
+  ReplayFrames();
   // Capture.
   int result =
       CaptureToPng(base_output_path_.replace_extension(".png")) ? 0 : 1;
