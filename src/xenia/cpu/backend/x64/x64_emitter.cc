@@ -1201,6 +1201,8 @@ void X64Emitter::CallNative(uint64_t (*fn)(void* raw_context, uint64_t arg0),
 }
 
 void X64Emitter::CallNativeSafe(void* fn) {
+  // The thunk restores mxcsr_fpu, so a tracked VMX mode is stale afterwards.
+  ForgetMxcsrMode();
   // rcx = target function
   // rdx = arg0
   // r8  = arg1
@@ -2241,6 +2243,9 @@ bool X64Emitter::ChangeMxcsrMode(MXCSRMode new_mode, bool already_set) {
         SetMxcsrModeFlags(*this, new_mode);
       }
       return true;
+    } else {
+      // The flags word must describe the new mode even on the already_set path.
+      SetMxcsrModeFlags(*this, new_mode);
     }
   }
   return false;

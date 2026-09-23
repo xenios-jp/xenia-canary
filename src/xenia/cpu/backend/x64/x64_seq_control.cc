@@ -203,6 +203,8 @@ struct TRAP_TRUE_I8
     e.test(i.src1, i.src1);
     e.jnz(dotrap, X64Emitter::T_NEAR);
     e.L(after);
+    // The trap path calls into the host, which restores mxcsr_fpu.
+    e.ForgetMxcsrMode();
   }
 };
 struct TRAP_TRUE_I16
