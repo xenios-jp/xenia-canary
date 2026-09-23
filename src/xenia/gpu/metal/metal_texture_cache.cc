@@ -58,6 +58,7 @@
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_dxt3aas1111_argb4_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_dxt5_rgba8_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_dxt5a_r8_cs.h"
+#include "xenia/gpu/shaders/bytecode/metal/texture_load_f16_direct_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_gbgr8_grgb8_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_gbgr8_rgb8_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_r10g11b11_rgba16_cs.h"
@@ -116,20 +117,24 @@ namespace metal {
 namespace {
 
 // Formats whose tiled 2D base level may be loaded straight into the texture
-// through its resolve refresh write view by the raw-word loader, rather than
+// through its resolve refresh write view by a raw-word loader, rather than
 // through a scratch buffer and a blit. The texture already has that view, and
 // the loader's output words are the texel bits of the host format.
 const struct DirectRawLoadFormat {
   xenos::TextureFormat format;
   MTL::PixelFormat host_format;
   xenos::Endian endianness;
+  // 64bpb rather than 32bpb.
+  bool is_64bpb;
 } kDirectRawLoadFormats[] = {
     {xenos::TextureFormat::k_2_10_10_10, MTL::PixelFormatRGB10A2Unorm,
-     xenos::Endian::k8in32},
+     xenos::Endian::k8in32, false},
     {xenos::TextureFormat::k_8_8_8_8, MTL::PixelFormatRGBA8Unorm,
-     xenos::Endian::k8in32},
+     xenos::Endian::k8in32, false},
     {xenos::TextureFormat::k_32_FLOAT, MTL::PixelFormatR32Float,
-     xenos::Endian::k8in32},
+     xenos::Endian::k8in32, false},
+    {xenos::TextureFormat::k_16_16_16_16_FLOAT, MTL::PixelFormatRGBA16Float,
+     xenos::Endian::k8in16, true},
 };
 
 #if XE_PLATFORM_IOS
@@ -1169,10 +1174,15 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
           format.endianness != key.endianness) {
         continue;
       }
-      // The loader writes 8 texels per thread.
-      if (load_shader == kLoadShaderIndex32bpb && bytes_per_block == 4 &&
-          load_shader_info.bytes_per_host_block == 4 && !(width & 7)) {
-        direct_raw_pipeline = load_direct_raw32_pipeline_;
+      // The loaders write 8 32-bit or 4 64-bit texels per thread.
+      if (format.is_64bpb
+              ? load_shader == kLoadShaderIndex64bpb && bytes_per_block == 8 &&
+                    load_shader_info.bytes_per_host_block == 8 && !(width & 3)
+              : load_shader == kLoadShaderIndex32bpb && bytes_per_block == 4 &&
+                    load_shader_info.bytes_per_host_block == 4 &&
+                    !(width & 7)) {
+        direct_raw_pipeline = format.is_64bpb ? load_direct_raw64_pipeline_
+                                              : load_direct_raw32_pipeline_;
       }
       break;
     }
@@ -1987,6 +1997,9 @@ bool MetalTextureCache::InitializeLoadPipelines() {
   load_direct_raw32_pipeline_ = create_pipeline_from_metallib(
       texture_load_rgb10_direct_cs_metallib,
       sizeof(texture_load_rgb10_direct_cs_metallib));
+  load_direct_raw64_pipeline_ = create_pipeline_from_metallib(
+      texture_load_f16_direct_cs_metallib,
+      sizeof(texture_load_f16_direct_cs_metallib));
   init_pipeline_scaled(TextureCache::kLoadShaderIndex32bpb,
                        texture_load_32bpb_scaled_cs_metallib,
                        sizeof(texture_load_32bpb_scaled_cs_metallib));
@@ -2196,6 +2209,10 @@ void MetalTextureCache::Shutdown() {
   if (load_direct_raw32_pipeline_) {
     load_direct_raw32_pipeline_->release();
     load_direct_raw32_pipeline_ = nullptr;
+  }
+  if (load_direct_raw64_pipeline_) {
+    load_direct_raw64_pipeline_->release();
+    load_direct_raw64_pipeline_ = nullptr;
   }
   // Follow existing shutdown pattern - explicit null checks and release
   if (null_texture_2d_) {
