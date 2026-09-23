@@ -562,7 +562,7 @@ bool UnmapFileView(FileMappingHandle handle, void* base_address,
                    size_t length) {
   std::lock_guard guard(g_mapped_file_ranges_mutex);
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   uintptr_t unmap_begin = reinterpret_cast<uintptr_t>(base_address);
   uintptr_t unmap_end = unmap_begin + length;
 
@@ -601,7 +601,7 @@ bool UnmapFileView(FileMappingHandle handle, void* base_address,
   // TODO: Implement partial file unmapping.
   assert_always("Error: Partial unmapping of files not yet supported.");
   return munmap(base_address, length) == 0;
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 }
 
 }  // namespace memory

@@ -15,7 +15,7 @@
 #include <random>
 #include <type_traits>
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 #include <sys/mman.h>
 #endif
 
@@ -116,7 +116,7 @@ static inline bool ShouldSkipHostCommit(const BaseHeap& heap) {
   if (heap.skip_host_protect()) {
     return true;
   }
-#if XE_PLATFORM_MAC || XE_PLATFORM_LINUX
+#if XE_PLATFORM_APPLE || XE_PLATFORM_LINUX
   // The parent physical heap is committed read/write in one shot by
   // Memory::Initialize and is only reached through physical_membase_, which
   // carries no guest protection - the virtual aliases hold that. Re-protecting
@@ -207,7 +207,7 @@ bool Memory::Initialize() {
     return false;
   }
 
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
   // On macOS, reserve a contiguous region chosen by the OS, then map views
   // into it at fixed offsets.
   if (MapViewsMac()) {
@@ -399,7 +399,7 @@ static const struct {
         0x0000000100000000ull,
     },
 };
-#if XE_PLATFORM_MAC
+#if XE_PLATFORM_APPLE
 int Memory::MapViewsMac() {
   assert_true(xe::countof(map_info) == xe::countof(views_.all_views));
 
@@ -445,7 +445,7 @@ int Memory::MapViewsMac() {
 
   return 0;
 }
-#endif  // XE_PLATFORM_MAC
+#endif  // XE_PLATFORM_APPLE
 
 int Memory::MapViews(uint8_t* mapping_base) {
   assert_true(xe::countof(map_info) == xe::countof(views_.all_views));
