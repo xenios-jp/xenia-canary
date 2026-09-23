@@ -652,6 +652,9 @@ bool MetalRenderTargetCache::Initialize() {
             NS::Range::Make(0, static_cast<NS::UInteger>(edram_size_bytes)), 0);
         blit->endEncoding();
         cmd->commit();
+      } else {
+        command_processor_.DiscardAccountedCommandBuffer(
+            cmd, MetalCommandProcessor::CommandBufferKind::kRenderTargetOther);
       }
     }
   }
@@ -1862,7 +1865,8 @@ void MetalRenderTargetCache::RestoreEdramSnapshot(const void* snapshot) {
 
   MTL::BlitCommandEncoder* blit = cmd->blitCommandEncoder();
   if (!blit) {
-    // cmd is autoreleased from commandBuffer() - do not release
+    command_processor_.DiscardAccountedCommandBuffer(
+        cmd, MetalCommandProcessor::CommandBufferKind::kRenderTargetOther);
     staging->release();
     return;
   }
@@ -2822,6 +2826,10 @@ bool MetalRenderTargetCache::DirectResolveRenderTargets(
   }
   MTL::ComputeCommandEncoder* encoder = cmd->computeCommandEncoder();
   if (!encoder) {
+    if (owns_command_buffer) {
+      command_processor_.DiscardAccountedCommandBuffer(
+          cmd, MetalCommandProcessor::CommandBufferKind::kRenderTargetResolve);
+    }
     return false;
   }
 
@@ -3023,6 +3031,8 @@ bool MetalRenderTargetCache::BeginEdramSnapshotReadback() {
       MetalCommandProcessor::CommandBufferKind::kRenderTargetOther);
   MTL::BlitCommandEncoder* blit = cmd ? cmd->blitCommandEncoder() : nullptr;
   if (!blit) {
+    command_processor_.DiscardAccountedCommandBuffer(
+        cmd, MetalCommandProcessor::CommandBufferKind::kRenderTargetOther);
     return false;
   }
   blit->copyFromBuffer(edram_buffer_, 0, edram_snapshot_download_buffer_, 0,
@@ -3090,7 +3100,10 @@ void MetalRenderTargetCache::DumpRenderTargets(
   MTL::ComputeCommandEncoder* encoder = cmd->computeCommandEncoder();
   if (!encoder) {
     XELOGE("MetalRenderTargetCache::DumpRenderTargets: no compute encoder");
-    // cmd is autoreleased from commandBuffer() - do not release
+    if (owns_command_buffer) {
+      command_processor_.DiscardAccountedCommandBuffer(
+          cmd, MetalCommandProcessor::CommandBufferKind::kRenderTargetDump);
+    }
     return;
   }
 
@@ -3837,7 +3850,11 @@ bool MetalRenderTargetCache::Resolve(Memory& memory, uint32_t& written_address,
             XELOGE(
                 "MetalRenderTargetCache::Resolve: failed to get compute "
                 "encoder for GPU path");
-            // cmd is autoreleased from commandBuffer() - do not release
+            if (owns_command_buffer) {
+              command_processor_.DiscardAccountedCommandBuffer(
+                  cmd, MetalCommandProcessor::CommandBufferKind::
+                           kRenderTargetResolve);
+            }
           } else {
             encoder->setComputePipelineState(pipeline);
 
