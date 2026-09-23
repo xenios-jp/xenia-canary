@@ -4629,7 +4629,8 @@ struct RSQRT_F64 : Sequence<RSQRT_F64, I<OPCODE_RSQRT, F64Op, F64Op>> {
       e.fmov(e.d0, e.x0);
     }
     e.fmov(e.x0, src);
-    e.mov(e.x9, reinterpret_cast<uint64_t>(e.backend()->frsqrte_helper()));
+    e.ldr(e.x9,
+          e.BackendCtxPtr(offsetof(A64BackendContext, frsqrte_helper_address)));
     e.blr(e.x9);
     e.fmov(i.dest, e.x0);
   }
@@ -4642,8 +4643,8 @@ struct RSQRT_V128 : Sequence<RSQRT_V128, I<OPCODE_RSQRT, V128Op, V128Op>> {
     // and one estimate covers all four.
     if (i.src1.value && i.src1.value->AllFloatVectorLanesSameValue()) {
       e.umov(e.w0, VReg(src_idx).s4[0]);
-      e.mov(e.x9,
-            reinterpret_cast<uint64_t>(e.backend()->vrsqrtefp_scalar_helper()));
+      e.ldr(e.x9, e.BackendCtxPtr(offsetof(A64BackendContext,
+                                           vrsqrtefp_scalar_helper_address)));
       e.blr(e.x9);
       e.dup(VReg(i.dest.reg().getIdx()).s4, e.w0);
       return;
@@ -4651,8 +4652,8 @@ struct RSQRT_V128 : Sequence<RSQRT_V128, I<OPCODE_RSQRT, V128Op, V128Op>> {
     if (src_idx != 0) {
       e.mov(VReg(0).b16, VReg(src_idx).b16);
     }
-    e.mov(e.x9,
-          reinterpret_cast<uint64_t>(e.backend()->vrsqrtefp_vector_helper()));
+    e.ldr(e.x9, e.BackendCtxPtr(offsetof(A64BackendContext,
+                                         vrsqrtefp_vector_helper_address)));
     e.blr(e.x9);
     e.mov(VReg(i.dest.reg().getIdx()).b16, VReg(0).b16);
   }

@@ -130,6 +130,16 @@ struct A64BackendContext {
   uint64_t guest_to_host_thunk_address;
   // Same thunk without the q4-q31 save/restore, for CallExtern.
   uint64_t guest_to_host_thunk_no_vec_address;
+  // Helpers Initialize emits into the code cache. The stack-repair entry is
+  // null unless --a64_enable_host_guest_stack_synchronization, which also
+  // gates every site that reads it.
+  uint64_t synchronize_guest_and_host_stack_helper_address;
+  uint64_t vrsqrtefp_scalar_helper_address;
+  uint64_t vrsqrtefp_vector_helper_address;
+  uint64_t frsqrte_helper_address;
+  // The address of the yield handler pointer, not the handler: the scheduler
+  // installs the handler after guest threads exist and drops it on shutdown.
+  uint64_t preempt_yield_handler_address;
   A64BackendStackpoint* stackpoints;
   // allocated by the first dynamic call resolve on this thread
   A64DynamicCallCacheEntry* dynamic_call_cache;
@@ -170,12 +180,6 @@ class A64Backend : public Backend {
   ResolveFunctionThunk resolve_function_thunk() const {
     return resolve_function_thunk_;
   }
-  void* synchronize_guest_and_host_stack_helper() const {
-    return synchronize_guest_and_host_stack_helper_;
-  }
-  void* vrsqrtefp_scalar_helper() const { return vrsqrtefp_scalar_helper_; }
-  void* vrsqrtefp_vector_helper() const { return vrsqrtefp_vector_helper_; }
-  void* frsqrte_helper() const { return frsqrte_helper_; }
 
   bool Initialize(Processor* processor) override;
 

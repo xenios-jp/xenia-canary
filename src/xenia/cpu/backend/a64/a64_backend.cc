@@ -1560,6 +1560,15 @@ void A64Backend::InitializeBackendContext(void* ctx) {
       reinterpret_cast<uint64_t>(guest_to_host_thunk_);
   a64_ctx->guest_to_host_thunk_no_vec_address =
       reinterpret_cast<uint64_t>(guest_to_host_thunk_no_vec_);
+  a64_ctx->synchronize_guest_and_host_stack_helper_address =
+      reinterpret_cast<uint64_t>(synchronize_guest_and_host_stack_helper_);
+  a64_ctx->vrsqrtefp_scalar_helper_address =
+      reinterpret_cast<uint64_t>(vrsqrtefp_scalar_helper_);
+  a64_ctx->vrsqrtefp_vector_helper_address =
+      reinterpret_cast<uint64_t>(vrsqrtefp_vector_helper_);
+  a64_ctx->frsqrte_helper_address = reinterpret_cast<uint64_t>(frsqrte_helper_);
+  a64_ctx->preempt_yield_handler_address =
+      reinterpret_cast<uint64_t>(&preempt_yield_handler);
 
   auto set_est = [&](int index, float value) {
     uint32_t bits;

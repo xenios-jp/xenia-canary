@@ -1131,8 +1131,8 @@ void A64Emitter::EmitPreemptCheck(uint32_t guest_address) {
     e.strb(e.wzr, ptr(e.x20, flag_offset));
     // Null until the scheduler starts, and a stale flag can reach here after
     // it shuts down, so check before calling.
-    e.mov(e.x0,
-          reinterpret_cast<uint64_t>(&xe::cpu::backend::preempt_yield_handler));
+    e.ldr(e.x0, e.BackendCtxPtr(offsetof(A64BackendContext,
+                                         preempt_yield_handler_address)));
     e.ldr(e.x0, ptr(e.x0));
     e.cbz(e.x0, after);
     e.ldr(e.x9, e.BackendCtxPtr(
@@ -1315,8 +1315,9 @@ void A64Emitter::EnsureSynchronizedGuestAndHostStack() {
     // instead of here because adr's ±1 MiB range can't span body+tail in
     // large functions.
     //   x8 = return address (where to resume after fixup)
-    e.mov(e.x10, reinterpret_cast<uint64_t>(
-                     e.backend()->synchronize_guest_and_host_stack_helper()));
+    e.ldr(e.x10, e.BackendCtxPtr(offsetof(
+                     A64BackendContext,
+                     synchronize_guest_and_host_stack_helper_address)));
     e.br(e.x10);
   });
   adr(x8, return_from_sync);

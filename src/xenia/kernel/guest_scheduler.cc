@@ -353,6 +353,8 @@ void GuestScheduler::Shutdown() {
     }
     cpu.host_thread.reset();
   }
+  // Every dispatch thread has exited, so no fiber reaches a safepoint again.
+  xe::cpu::backend::preempt_yield_handler = nullptr;
   if (watchdog_thread_) {
     xe::threading::Wait(watchdog_thread_.get(), false);
     watchdog_thread_.reset();
