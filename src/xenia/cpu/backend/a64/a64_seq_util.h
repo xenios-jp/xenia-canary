@@ -298,14 +298,31 @@ inline int SrcVReg(A64Emitter& e, const T& op, int scratch_idx) {
   return op.reg().getIdx();
 }
 
+inline bool NeedsPhysicalRemap() {
+  return xe::memory::allocation_granularity() > 0x1000;
+}
+
+// w0 = src, plus 0x1000 when src >= 0xE0000000. The bound is not an
+// immediate operand, so it is kept in w7 until the emitter drops it.
+inline void ApplyPhysicalRemapW0(A64Emitter& e,
+                                 const Xbyak_aarch64::WReg& src) {
+  using namespace Xbyak_aarch64;
+  if (!e.physical_remap_bound_valid()) {
+    e.mov(e.w7, uint64_t(0xE0000000u));
+    e.set_physical_remap_bound_valid();
+  }
+  e.cmp(src, e.w7);
+  e.add(e.w17, src, 1, 12);  // + 0x1000 via LSL #12
+  e.csel(e.w0, e.w17, src, HS);
+}
+
 // Compute a guest memory address, returning the XReg for [x21, xN] addressing.
 // For constants, loads the address into x0 (scratch).
 inline XReg ComputeMemoryAddress(A64Emitter& e, const I64Op& guest) {
   using namespace Xbyak_aarch64;
   if (guest.is_constant) {
     uint32_t address = static_cast<uint32_t>(guest.constant());
-    if (address >= 0xE0000000 &&
-        xe::memory::allocation_granularity() > 0x1000) {
+    if (address >= 0xE0000000 && NeedsPhysicalRemap()) {
       address += 0x1000;
     }
     e.mov(e.x0, static_cast<uint64_t>(address));
@@ -314,47 +331,107 @@ inline XReg ComputeMemoryAddress(A64Emitter& e, const I64Op& guest) {
     auto src = guest.reg();
     // Guest addresses are always 32-bit. Clear any stale upper bits before
     // applying the host membase so guest pointers can't escape above 4 GB.
-    e.mov(e.w0, WReg(src.getIdx()));
-    if (xe::memory::allocation_granularity() > 0x1000) {
-      // Branch-free: w17 = w0 + 0x1000, kept only when w0 >= 0xE0000000.
-      e.mov(e.w17, 0xE0000000u);
-      e.cmp(e.w0, e.w17);
-      e.add(e.w17, e.w0, 1, 12);  // w17 = w0 + 0x1000 via LSL #12
-      e.csel(e.w0, e.w0, e.w17, LO);
+    // The remap writes w0 itself, which is the same truncation.
+    if (NeedsPhysicalRemap()) {
+      ApplyPhysicalRemapW0(e, WReg(src.getIdx()));
+    } else {
+      e.mov(e.w0, WReg(src.getIdx()));
     }
     return e.x0;
   }
 }
 
+inline bool GuestMemDirectIndex(const I64Op& guest, int* out_w_idx) {
+  if (guest.is_constant || NeedsPhysicalRemap()) {
+    return false;
+  }
+  *out_w_idx = guest.reg().getIdx();
+  return true;
+}
+
+// The fallback address lives in x0; emit_access must not clobber it first.
+template <typename Fn>
+inline void EmitGuestMemAccess(A64Emitter& e, const I64Op& guest,
+                               Fn&& emit_access) {
+  int w_idx;
+  if (GuestMemDirectIndex(guest, &w_idx)) {
+    emit_access(ptr(e.GetMembaseReg(), WReg(w_idx), Xbyak_aarch64::UXTW));
+  } else {
+    emit_access(ptr(e.GetMembaseReg(), ComputeMemoryAddress(e, guest)));
+  }
+}
+
+// Adds a displacement to a guest address in W registers, so it wraps at 32
+// bits. Returns base unchanged for a zero displacement, else x0.
 template <typename OffsetOp>
 inline XReg AddGuestMemoryOffset(A64Emitter& e, const XReg& base,
                                  const OffsetOp& offset) {
-  // Guest address arithmetic wraps at 32 bits before the host membase is
-  // applied. Keep the add in W registers so stale high bits can't escape into
-  // the final host pointer.
-  e.mov(e.w0, WReg(base.getIdx()));
+  const WReg src = WReg(base.getIdx());
   if (offset.is_constant) {
     const uint32_t imm = static_cast<uint32_t>(offset.constant());
     const uint32_t neg = 0u - imm;
     if (imm == 0) {
-      // Nothing to add.
+      return base;
     } else if (imm <= 0xFFF) {
-      e.add(e.w0, e.w0, imm);
+      e.add(e.w0, src, imm);
     } else if (!(imm & 0xFFF) && (imm >> 12) <= 0xFFF) {
-      e.add(e.w0, e.w0, imm >> 12, 12);
+      e.add(e.w0, src, imm >> 12, 12);
     } else if (neg <= 0xFFF) {
       // Adding a small negative offset wraps identically to subtracting.
-      e.sub(e.w0, e.w0, neg);
+      e.sub(e.w0, src, neg);
     } else if (!(neg & 0xFFF) && (neg >> 12) <= 0xFFF) {
-      e.sub(e.w0, e.w0, neg >> 12, 12);
+      e.sub(e.w0, src, neg >> 12, 12);
     } else {
       e.mov(e.w17, static_cast<uint64_t>(imm));
-      e.add(e.w0, e.w0, e.w17);
+      e.add(e.w0, src, e.w17);
     }
   } else {
-    e.add(e.w0, e.w0, WReg(offset.reg().getIdx()));
+    e.add(e.w0, src, WReg(offset.reg().getIdx()));
   }
   return e.x0;
+}
+
+// The remap is decided on the effective address, not the base, as on x64.
+template <typename OffsetOp>
+inline XReg ComputeMemoryAddressOffset(A64Emitter& e, const I64Op& guest,
+                                       const OffsetOp& offset) {
+  using namespace Xbyak_aarch64;
+  if (guest.is_constant && offset.is_constant) {
+    uint32_t address = static_cast<uint32_t>(guest.constant()) +
+                       static_cast<uint32_t>(offset.constant());
+    if (address >= 0xE0000000 && NeedsPhysicalRemap()) {
+      address += 0x1000;
+    }
+    e.mov(e.x0, static_cast<uint64_t>(address));
+    return e.x0;
+  }
+  XReg address = e.x0;
+  if (guest.is_constant) {
+    e.mov(e.w0, static_cast<uint64_t>(static_cast<uint32_t>(guest.constant())));
+    address = AddGuestMemoryOffset(e, e.x0, offset);
+  } else {
+    address = AddGuestMemoryOffset(e, guest.reg(), offset);
+  }
+  if (NeedsPhysicalRemap()) {
+    ApplyPhysicalRemapW0(e, WReg(address.getIdx()));
+  } else if (address.getIdx() != e.x0.getIdx()) {
+    e.mov(e.w0, WReg(address.getIdx()));
+  }
+  return e.x0;
+}
+
+// Guest addresses wrap at 32 bits: a nonzero displacement is added in W first.
+template <typename OffsetOp, typename Fn>
+inline void EmitGuestMemAccessOffset(A64Emitter& e, const I64Op& guest,
+                                     const OffsetOp& offset, Fn&& emit_access) {
+  int w_idx;
+  if (offset.is_constant && offset.constant() == 0 &&
+      GuestMemDirectIndex(guest, &w_idx)) {
+    emit_access(ptr(e.GetMembaseReg(), WReg(w_idx), Xbyak_aarch64::UXTW));
+  } else {
+    emit_access(
+        ptr(e.GetMembaseReg(), ComputeMemoryAddressOffset(e, guest, offset)));
+  }
 }
 
 // Flush denormal float32 lanes to zero in a NEON register (in-place).

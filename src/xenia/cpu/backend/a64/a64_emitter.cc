@@ -220,6 +220,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
     // Reset FPCR tracking on each block entry (we don't know which
     // predecessor ran, so mode is unknown).
     ForgetFpcrMode();
+    DropPhysicalRemapBound();
 
     // Bind all labels targeting this block.
     auto label = block->label_head;
@@ -598,6 +599,7 @@ void A64Emitter::UnimplementedInstr(const hir::Instr* i) {
 void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
   assert_not_null(function);
   ForgetFpcrMode();
+  DropPhysicalRemapBound();
   if (TryInlinePPCGprLrSaveRestore(instr, function)) {
     return;
   }
@@ -764,6 +766,7 @@ bool A64Emitter::TryInlinePPCGprLrSaveRestore(const hir::Instr* instr,
 
 void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
   ForgetFpcrMode();
+  DropPhysicalRemapBound();
   auto target_w = WReg(reg_index);
 
   // Check if this is a possible return (e.g., PPC blr).
@@ -864,6 +867,7 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
 
 void A64Emitter::CallExtern(const hir::Instr* instr, const Function* function) {
   ForgetFpcrMode();
+  DropPhysicalRemapBound();
   bool undefined = true;
   if (function->behavior() == Function::Behavior::kBuiltin) {
     auto builtin_function = static_cast<const BuiltinFunction*>(function);
@@ -930,6 +934,7 @@ void A64Emitter::EmitDynamicCallLookup(bool tail) {
 void A64Emitter::CallNative(void* fn) { CallNativeSafe(fn); }
 
 void A64Emitter::CallNativeSafe(void* fn) {
+  DropPhysicalRemapBound();
   // GuestToHostThunk: x0=target function, x1/x2=args (set by caller).
   // The thunk rearranges: saves x0 in x9, sets x0=context, calls x9.
   mov(x0, reinterpret_cast<uint64_t>(fn));

@@ -239,7 +239,17 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   void L(Xbyak_aarch64::Label& label) {
     CodeGenerator::L(label);
     label_bind_offsets_.emplace(label.getId(), getSize());
+    // A label may be reached from code that never loaded the bound.
+    DropPhysicalRemapBound();
   }
+
+  // w7 holds 0xE0000000 for the physical remap from its first use until the
+  // next label, block or host call. Nothing else in the backend uses w7.
+  bool physical_remap_bound_valid() const {
+    return physical_remap_bound_valid_;
+  }
+  void set_physical_remap_bound_valid() { physical_remap_bound_valid_ = true; }
+  void DropPhysicalRemapBound() { physical_remap_bound_valid_ = false; }
 
   // Get or create a xbyak_aarch64 label for a HIR label ID.
   Xbyak_aarch64::Label& GetLabel(uint32_t label_id);
@@ -331,6 +341,7 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   static constexpr int64_t kTestBranchBackwardRange = (1ll << 15) - 8;
 
   FPCRMode fpcr_mode_ = FPCRMode::Unknown;
+  bool physical_remap_bound_valid_ = false;
   bool synchronize_stack_on_next_instruction_ = false;
 };
 
