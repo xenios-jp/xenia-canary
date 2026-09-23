@@ -871,6 +871,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
                 : register_file_->values[poll_reg_addr];
 
   bool matched = false;
+  bool submitted_memory_producers = false;
 
   do {
     uint32_t value = value_ref;
@@ -903,6 +904,13 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
     matched = MatchValueAndRef(value & mask, ref, wait_info);
 
     if (!matched) {
+      // A short-delay memory poll must also submit queued GPU producers (long
+      // waits do in PrepareForWait), but an already satisfied poll must not
+      // split an unrelated open pass.
+      if (is_memory && wait < 0x100 && !submitted_memory_producers) {
+        SubmitBeforeShortMemoryPoll();
+        submitted_memory_producers = true;
+      }
       // Wait using the duration specified by the guest.
       if (wait >= 0x100) {
         PrepareForWait();
@@ -921,11 +929,10 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_WAIT_REG_MEM(
         // Unlimited vblank mode (guest_display_refresh_cap=false) - spin since
         // counter updates rapidly
         ReturnFromWait();
-
-        if (!worker_running_) {
-          // Short-circuited exit.
-          return false;
-        }
+      }
+      if (!worker_running_) {
+        // Short polls must also stop when the command processor shuts down.
+        return false;
       }
     }
   } while (!matched);
