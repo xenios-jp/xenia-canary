@@ -456,7 +456,8 @@ class MetalCommandProcessor : public CommandProcessor {
   // too, instead of on the draw thread.
   Shader::Translation* GetOrCreateHostTranslation(
       SpirvShader& shader, uint64_t modification, bool allow_async,
-      ShaderCompileStatus* compile_status_out);
+      ShaderCompileStatus* compile_status_out,
+      std::shared_ptr<const Shader::Specialization> specialization = {});
 
   // One MSC stage of a tessellated draw.
   struct DxilTessellationStage {
