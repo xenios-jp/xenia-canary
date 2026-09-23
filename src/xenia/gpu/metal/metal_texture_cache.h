@@ -198,6 +198,7 @@ class MetalTextureCache : public TextureCache {
   // resolution-scaled variants), indexed by TextureCache::LoadShaderIndex.
   MTL::ComputePipelineState* load_pipelines_[kLoadShaderCount] = {};
   MTL::ComputePipelineState* load_pipelines_scaled_[kLoadShaderCount] = {};
+  MTL::ComputePipelineState* load_direct_raw32_pipeline_ = nullptr;
 
   // Metal-specific Texture implementation
 

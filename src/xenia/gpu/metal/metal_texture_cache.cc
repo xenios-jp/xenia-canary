@@ -84,6 +84,7 @@
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_rg16_snorm_float_scaled_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_rg16_unorm_float_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_rg16_unorm_float_scaled_cs.h"
+#include "xenia/gpu/shaders/bytecode/metal/texture_load_rgb10_direct_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_rgba16_snorm_float_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_rgba16_snorm_float_scaled_cs.h"
 #include "xenia/gpu/shaders/bytecode/metal/texture_load_rgba16_unorm_float_cs.h"
@@ -109,11 +110,25 @@ DEFINE_bool(metal_use_heaps, true,
             "Metal");
 DEFINE_int32(metal_heap_min_bytes, 33554432,
              "Minimum heap size (bytes) for Metal heap allocations.", "Metal");
-
 namespace xe {
 namespace gpu {
 namespace metal {
 namespace {
+
+// Formats whose tiled 2D base level may be loaded straight into the texture
+// through its resolve refresh write view by the raw-word loader, rather than
+// through a scratch buffer and a blit. The texture already has that view, and
+// the loader's output words are the texel bits of the host format.
+const struct DirectRawLoadFormat {
+  xenos::TextureFormat format;
+  MTL::PixelFormat host_format;
+  xenos::Endian endianness;
+} kDirectRawLoadFormats[] = {
+    {xenos::TextureFormat::k_2_10_10_10, MTL::PixelFormatRGB10A2Unorm,
+     xenos::Endian::k8in32},
+    {xenos::TextureFormat::k_8_8_8_8, MTL::PixelFormatRGBA8Unorm,
+     xenos::Endian::k8in32},
+};
 
 #if XE_PLATFORM_IOS
 constexpr uint64_t kUploadBufferPoolMaxBytes = 128ull * 1024ull * 1024ull;
@@ -1132,8 +1147,41 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     });
   };
 
-  MTL::Buffer* dest_buffer = acquire_buffer(size_t(dest_buffer_size));
-  if (!dest_buffer) {
+  // A tiled single-level 2D base of a format with a raw-word loader is written
+  // straight into the texture through its resolve refresh write view, without
+  // a scratch buffer and a blit.
+  MTL::Texture* host_texture = metal_texture->metal_texture();
+  MTL::ComputePipelineState* direct_raw_pipeline = nullptr;
+  if (ShouldUploadViaBlit() && load_base && !load_mips &&
+      !texture_resolution_scaled && key.tiled && !key.packed_mips &&
+      !key.mip_max_level && dimension == xenos::DataDimension::k2DOrStacked &&
+      !is_3d_tiling && array_size == 1 && stored_levels.size() == 1 &&
+      stored_levels[0].is_base && !stored_levels[0].level && block_width == 1 &&
+      block_height == 1 && IsResolveRefreshKey(key) &&
+      host_texture->textureType() == MTL::TextureType2DArray &&
+      host_texture->arrayLength() == 1 && host_texture->sampleCount() == 1 &&
+      host_texture->width() == width && host_texture->height() == height) {
+    for (const DirectRawLoadFormat& format : kDirectRawLoadFormats) {
+      if (format.format != key.format ||
+          format.host_format != host_texture->pixelFormat() ||
+          format.endianness != key.endianness) {
+        continue;
+      }
+      // The loader writes 8 texels per thread.
+      if (load_shader == kLoadShaderIndex32bpb && bytes_per_block == 4 &&
+          load_shader_info.bytes_per_host_block == 4 && !(width & 7)) {
+        direct_raw_pipeline = load_direct_raw32_pipeline_;
+      }
+      break;
+    }
+  }
+  MTL::Texture* direct_raw_view =
+      direct_raw_pipeline ? metal_texture->GetOrCreateResolveWriteView()
+                          : nullptr;
+  const bool use_direct_raw = direct_raw_view != nullptr;
+  MTL::Buffer* dest_buffer =
+      use_direct_raw ? nullptr : acquire_buffer(size_t(dest_buffer_size));
+  if (!use_direct_raw && !dest_buffer) {
     return false;
   }
 
@@ -1297,7 +1345,12 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
     handle_upload_failure(true);
     return false;
   }
-  encoder->setComputePipelineState(pipeline);
+  encoder->setComputePipelineState(use_direct_raw ? direct_raw_pipeline
+                                                  : pipeline);
+  if (use_direct_raw) {
+    // Slang packs Metal texture arguments separately from HLSL registers.
+    encoder->setTexture(direct_raw_view, 0);
+  }
 
   uint32_t guest_x_blocks_per_group_log2 =
       load_shader_info.GetGuestXBlocksPerGroupLog2();
@@ -1420,10 +1473,12 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
       std::memcpy(constants_ptr, &constants, sizeof(constants));
 
       encoder->setBuffer(constants_buffer, dispatch_index * constants_size, 0);
-      encoder->setBuffer(dest_buffer,
-                         stored_level.dest_offset_bytes +
-                             slice * stored_level.slice_size_bytes,
-                         1);
+      if (!use_direct_raw) {
+        encoder->setBuffer(dest_buffer,
+                           stored_level.dest_offset_bytes +
+                               slice * stored_level.slice_size_bytes,
+                           1);
+      }
       encoder->dispatchThreadgroups(threadgroups, threads_per_group);
       command_buffer_has_work = true;
       ++dispatch_index;
@@ -1433,6 +1488,26 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
   {
     SCOPE_profile_cpu_i("gpu", "MetalTextureCache::ComputeEncoderEnd");
     encoder->endEncoding();
+  }
+
+  // The end of a GPU upload: the buffers are released once cmd completes, and
+  // a standalone command buffer is committed.
+  auto finish_gpu_upload = [&]() {
+    release_buffer_after(cmd, constants_buffer, constants_buffer_size);
+    release_buffer_after(cmd, dest_buffer, size_t(dest_buffer_size));
+    if (use_upload_batch) {
+      upload_batch_command_buffer_has_work_ = true;
+    } else if (!use_current_command_buffer) {
+      cmd->retain();
+      cmd->addCompletedHandler(^(MTL::CommandBuffer* cb) {
+        cb->release();
+      });
+      cmd->commit();
+    }
+  };
+  if (use_direct_raw) {
+    finish_gpu_upload();
+    return true;
   }
 
   MTL::Texture* mtl_texture = metal_texture->metal_texture();
@@ -1446,6 +1521,9 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
 
     uint32_t bytes_per_host_block = load_shader_info.bytes_per_host_block;
     const uint32_t blit_alignment = 256;
+    // Levels that need staging share one staging buffer, grown as needed.
+    MTL::Buffer* reusable_staging_buffer = nullptr;
+    size_t reusable_staging_size = 0;
 
     for (uint32_t level = level_first; level <= level_last; ++level) {
       uint32_t stored_level = std::min(level, level_packed);
@@ -1523,12 +1601,21 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
         if (requires_staging) {
           SCOPE_profile_cpu_i("gpu", "MetalTextureCache::StagingRowCopy");
           size_t staging_size = blit_bytes_per_image * level_depth;
-          MTL::Buffer* staging_buffer = acquire_buffer(staging_size);
-          if (!staging_buffer) {
-            blit->endEncoding();
-            handle_upload_failure(true);
-            return false;
+          if (staging_size > reusable_staging_size) {
+            MTL::Buffer* staging_buffer = acquire_buffer(staging_size);
+            if (!staging_buffer) {
+              release_buffer_after(cmd, reusable_staging_buffer,
+                                   reusable_staging_size);
+              blit->endEncoding();
+              handle_upload_failure(true);
+              return false;
+            }
+            release_buffer_after(cmd, reusable_staging_buffer,
+                                 reusable_staging_size);
+            reusable_staging_buffer = staging_buffer;
+            reusable_staging_size = staging_size;
           }
+          MTL::Buffer* staging_buffer = reusable_staging_buffer;
 
           for (uint32_t z = 0; z < level_depth; ++z) {
             size_t src_z_offset =
@@ -1549,8 +1636,6 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
                               level_depth),
               mtl_texture, is_3d ? 0 : slice, level,
               MTL::Origin::Make(0, 0, 0));
-
-          release_buffer_after(cmd, staging_buffer, staging_size);
         } else {
           blit->copyFromBuffer(
               dest_buffer, source_offset_bytes, stored_layout->row_pitch_bytes,
@@ -1563,18 +1648,9 @@ bool MetalTextureCache::TryGpuLoadTexture(Texture& texture, bool load_base,
       }
     }
 
+    release_buffer_after(cmd, reusable_staging_buffer, reusable_staging_size);
     blit->endEncoding();
-    release_buffer_after(cmd, constants_buffer, constants_buffer_size);
-    release_buffer_after(cmd, dest_buffer, size_t(dest_buffer_size));
-    if (use_upload_batch) {
-      upload_batch_command_buffer_has_work_ = true;
-    } else if (!use_current_command_buffer) {
-      cmd->retain();
-      cmd->addCompletedHandler(^(MTL::CommandBuffer* cb) {
-        cb->release();
-      });
-      cmd->commit();
-    }
+    finish_gpu_upload();
   } else {
     cmd->commit();
     cmd->waitUntilCompleted();
@@ -1904,6 +1980,11 @@ bool MetalTextureCache::InitializeLoadPipelines() {
   init_pipeline(TextureCache::kLoadShaderIndex32bpb,
                 texture_load_32bpb_cs_metallib,
                 sizeof(texture_load_32bpb_cs_metallib));
+  // The raw 32-bit loader writes the guest words, which are the texels of each
+  // host format in kDirectRawLoadFormats.
+  load_direct_raw32_pipeline_ = create_pipeline_from_metallib(
+      texture_load_rgb10_direct_cs_metallib,
+      sizeof(texture_load_rgb10_direct_cs_metallib));
   init_pipeline_scaled(TextureCache::kLoadShaderIndex32bpb,
                        texture_load_32bpb_scaled_cs_metallib,
                        sizeof(texture_load_32bpb_scaled_cs_metallib));
@@ -2110,7 +2191,10 @@ void MetalTextureCache::Shutdown() {
       load_pipelines_scaled_[i] = nullptr;
     }
   }
-
+  if (load_direct_raw32_pipeline_) {
+    load_direct_raw32_pipeline_->release();
+    load_direct_raw32_pipeline_ = nullptr;
+  }
   // Follow existing shutdown pattern - explicit null checks and release
   if (null_texture_2d_) {
     null_texture_2d_->release();
