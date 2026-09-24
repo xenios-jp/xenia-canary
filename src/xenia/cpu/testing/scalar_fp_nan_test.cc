@@ -77,10 +77,20 @@ uint64_t Quiet(uint64_t bits) {
   return IsNaN(bits) ? bits | (1ull << 51) : bits;
 }
 
-void RunMatrix(FpOp op) {
-  TestFunction test([op](HIRBuilder& b) {
+// Where the second operand comes from. The backend can leave the NaN rule to
+// the hardware when the second operand is the first, or the result of
+// arithmetic, which is never a signalling NaN.
+enum class Second { kLoaded, kArithmetic, kFirst };
+
+void RunMatrix(FpOp op, Second second = Second::kLoaded) {
+  TestFunction test([op, second](HIRBuilder& b) {
     Value* a = LoadFPR(b, 1);
-    Value* c = LoadFPR(b, 2);
+    Value* c = a;
+    if (second == Second::kLoaded) {
+      c = LoadFPR(b, 2);
+    } else if (second == Second::kArithmetic) {
+      c = b.Mul(LoadFPR(b, 2), b.LoadConstantFloat64(1.0));
+    }
     Value* r = nullptr;
     switch (op) {
       case FpOp::kAdd:
@@ -101,6 +111,11 @@ void RunMatrix(FpOp op) {
   });
   for (uint64_t a : kValues) {
     for (uint64_t c : kValues) {
+      // Multiplying by one quiets a NaN and changes nothing else here: the
+      // FPU mode does not flush denormals.
+      const uint64_t second_bits = second == Second::kFirst        ? a
+                                   : second == Second::kArithmetic ? Quiet(c)
+                                                                   : c;
       INFO("a 0x" << std::hex << a << " b 0x" << c);
       test.Run(
           [&](PPCContext* ctx) {
@@ -110,7 +125,7 @@ void RunMatrix(FpOp op) {
           [&](PPCContext* ctx) {
             uint64_t result;
             std::memcpy(&result, &ctx->f[3], sizeof(result));
-            REQUIRE(result == Reference(a, c, op));
+            REQUIRE(result == Reference(a, second_bits, op));
           });
     }
   }
@@ -186,6 +201,16 @@ TEST_CASE("SCALAR_FP_NAN_ADD", "[instr]") { RunMatrix(FpOp::kAdd); }
 TEST_CASE("SCALAR_FP_NAN_SUB", "[instr]") { RunMatrix(FpOp::kSub); }
 TEST_CASE("SCALAR_FP_NAN_MUL", "[instr]") { RunMatrix(FpOp::kMul); }
 TEST_CASE("SCALAR_FP_NAN_DIV", "[instr]") { RunMatrix(FpOp::kDiv); }
+TEST_CASE("SCALAR_FP_NAN_ARITHMETIC_SECOND", "[instr]") {
+  for (FpOp op : {FpOp::kAdd, FpOp::kSub, FpOp::kMul, FpOp::kDiv}) {
+    RunMatrix(op, Second::kArithmetic);
+  }
+}
+TEST_CASE("SCALAR_FP_NAN_SAME_OPERAND", "[instr]") {
+  for (FpOp op : {FpOp::kAdd, FpOp::kSub, FpOp::kMul, FpOp::kDiv}) {
+    RunMatrix(op, Second::kFirst);
+  }
+}
 TEST_CASE("SCALAR_FP_NAN_MUL_ADD", "[instr]") { RunFmaMatrix(false, false); }
 TEST_CASE("SCALAR_FP_NAN_MUL_SUB", "[instr]") { RunFmaMatrix(true, false); }
 TEST_CASE("SCALAR_FP_NAN_NMUL_ADD", "[instr]") { RunFmaMatrix(false, true); }

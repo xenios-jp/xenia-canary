@@ -581,6 +581,61 @@ struct ADD_I64 : Sequence<ADD_I64, I<OPCODE_ADD, I64Op, I64Op, I64Op>> {
 // quiet NaN and the second a signalling one.
 enum class FpBinOp { Add, Sub, Mul, Div };
 
+// Whether a scalar float value can never be a signalling NaN. ARM arithmetic
+// and conversions never produce one with FPCR.DN clear: a NaN result is a
+// quieted operand or the default QNaN, and the fixups below only substitute
+// another quieted operand. Sign operations and selects keep what they are
+// given.
+static bool IsNeverSignalingNan(const hir::Value* v, int depth = 0) {
+  if (v->IsConstant()) {
+    if (v->type == hir::FLOAT32_TYPE) {
+      const uint32_t bits = v->constant.u32;
+      return (bits & 0x7F800000u) != 0x7F800000u || (bits & 0x00400000u) ||
+             !(bits & 0x003FFFFFu);
+    }
+    if (v->type == hir::FLOAT64_TYPE) {
+      const uint64_t bits = v->constant.u64;
+      return (bits & 0x7FF0000000000000ull) != 0x7FF0000000000000ull ||
+             (bits & 0x0008000000000000ull) || !(bits & 0x0007FFFFFFFFFFFFull);
+    }
+    return false;
+  }
+  const hir::Instr* def = v->def;
+  if (!def || depth >= 4) {
+    return false;
+  }
+  switch (def->GetOpcodeNum()) {
+    case hir::OPCODE_ADD:
+    case hir::OPCODE_SUB:
+    case hir::OPCODE_MUL:
+    case hir::OPCODE_DIV:
+    case hir::OPCODE_MUL_ADD:
+    case hir::OPCODE_MUL_SUB:
+    case hir::OPCODE_TO_SINGLE:
+    case hir::OPCODE_CONVERT:
+      return true;
+    case hir::OPCODE_ASSIGN:
+    case hir::OPCODE_NEG:
+    case hir::OPCODE_ABS:
+      return IsNeverSignalingNan(def->src1.value, depth + 1);
+    case hir::OPCODE_SELECT:
+      return IsNeverSignalingNan(def->src2.value, depth + 1) &&
+             IsNeverSignalingNan(def->src3.value, depth + 1);
+    default:
+      return false;
+  }
+}
+
+static bool IsNonNanConstant(const hir::Value* v) {
+  if (!v->IsConstant()) {
+    return false;
+  }
+  if (v->type == hir::FLOAT32_TYPE) {
+    return !std::isnan(v->constant.f32);
+  }
+  return v->type == hir::FLOAT64_TYPE && !std::isnan(v->constant.f64);
+}
+
 // Adding a NaN to itself quiets it without changing its payload or sign.
 template <typename Reg>
 static void EmitTakeNanOperand(A64Emitter& e, const Reg& dest,
@@ -594,13 +649,20 @@ static void EmitTakeNanOperand(A64Emitter& e, const Reg& dest,
 }
 
 template <typename Reg>
-static void EmitFpBinOpWithPpcNan(A64Emitter& e, std::type_identity_t<Reg> dest,
-                                  Reg s1, Reg s2, FpBinOp op) {
+static void EmitFpBinOpWithPpcNan(A64Emitter& e, const hir::Instr* instr,
+                                  std::type_identity_t<Reg> dest, Reg s1,
+                                  Reg s2, FpBinOp op) {
   e.ChangeFpcrMode(FPCRMode::Fpu);
+  // The ARM result is already PowerPC's unless the first operand can be a
+  // quiet NaN while the second is a signalling one.
+  const hir::Value* v1 = instr->src1.value;
+  const hir::Value* v2 = instr->src2.value;
+  const bool fixup =
+      v1 != v2 && !IsNeverSignalingNan(v2) && !IsNonNanConstant(v1);
 
   // Preserve the first source if the op overwrites it: the fixup reads it.
   Reg t1 = s1;
-  if (dest.getIdx() == s1.getIdx()) {
+  if (fixup && dest.getIdx() == s1.getIdx()) {
     e.fmov(Reg(2), s1);
     t1 = Reg(2);
   }
@@ -618,6 +680,9 @@ static void EmitFpBinOpWithPpcNan(A64Emitter& e, std::type_identity_t<Reg> dest,
     case FpBinOp::Div:
       e.fdiv(dest, s1, s2);
       break;
+  }
+  if (!fixup) {
+    return;
   }
   // Any NaN operand makes the result a NaN, so one compare of the result
   // keeps the rest out of line. There, a NaN first operand wins; otherwise
@@ -709,7 +774,7 @@ struct ADD_F32 : Sequence<ADD_F32, I<OPCODE_ADD, F32Op, F32Op, F32Op>> {
       e.mov(e.w0, static_cast<uint64_t>(c.u));
       e.fmov(e.s1, e.w0);
     }
-    EmitFpBinOpWithPpcNan(e, i.dest, s1, s2, FpBinOp::Add);
+    EmitFpBinOpWithPpcNan(e, i.instr, i.dest, s1, s2, FpBinOp::Add);
   }
 };
 struct ADD_F64 : Sequence<ADD_F64, I<OPCODE_ADD, F64Op, F64Op, F64Op>> {
@@ -734,7 +799,7 @@ struct ADD_F64 : Sequence<ADD_F64, I<OPCODE_ADD, F64Op, F64Op, F64Op>> {
       e.mov(e.x0, c.u);
       e.fmov(e.d1, e.x0);
     }
-    EmitFpBinOpWithPpcNan(e, i.dest, s1, s2, FpBinOp::Add);
+    EmitFpBinOpWithPpcNan(e, i.instr, i.dest, s1, s2, FpBinOp::Add);
   }
 };
 struct ADD_V128 : Sequence<ADD_V128, I<OPCODE_ADD, V128Op, V128Op, V128Op>> {
@@ -1022,7 +1087,7 @@ struct SUB_F32 : Sequence<SUB_F32, I<OPCODE_SUB, F32Op, F32Op, F32Op>> {
       e.mov(e.w0, static_cast<uint64_t>(c.u));
       e.fmov(e.s1, e.w0);
     }
-    EmitFpBinOpWithPpcNan(e, i.dest, s1, s2, FpBinOp::Sub);
+    EmitFpBinOpWithPpcNan(e, i.instr, i.dest, s1, s2, FpBinOp::Sub);
   }
 };
 struct SUB_F64 : Sequence<SUB_F64, I<OPCODE_SUB, F64Op, F64Op, F64Op>> {
@@ -1047,7 +1112,7 @@ struct SUB_F64 : Sequence<SUB_F64, I<OPCODE_SUB, F64Op, F64Op, F64Op>> {
       e.mov(e.x0, c.u);
       e.fmov(e.d1, e.x0);
     }
-    EmitFpBinOpWithPpcNan(e, i.dest, s1, s2, FpBinOp::Sub);
+    EmitFpBinOpWithPpcNan(e, i.instr, i.dest, s1, s2, FpBinOp::Sub);
   }
 };
 struct SUB_V128 : Sequence<SUB_V128, I<OPCODE_SUB, V128Op, V128Op, V128Op>> {
@@ -1267,7 +1332,7 @@ struct MUL_F32 : Sequence<MUL_F32, I<OPCODE_MUL, F32Op, F32Op, F32Op>> {
       e.mov(e.w0, static_cast<uint64_t>(c.u));
       e.fmov(e.s1, e.w0);
     }
-    EmitFpBinOpWithPpcNan(e, i.dest, s1, s2, FpBinOp::Mul);
+    EmitFpBinOpWithPpcNan(e, i.instr, i.dest, s1, s2, FpBinOp::Mul);
   }
 };
 struct MUL_F64 : Sequence<MUL_F64, I<OPCODE_MUL, F64Op, F64Op, F64Op>> {
@@ -1292,7 +1357,7 @@ struct MUL_F64 : Sequence<MUL_F64, I<OPCODE_MUL, F64Op, F64Op, F64Op>> {
       e.mov(e.x0, c.u);
       e.fmov(e.d1, e.x0);
     }
-    EmitFpBinOpWithPpcNan(e, i.dest, s1, s2, FpBinOp::Mul);
+    EmitFpBinOpWithPpcNan(e, i.instr, i.dest, s1, s2, FpBinOp::Mul);
   }
 };
 struct MUL_V128 : Sequence<MUL_V128, I<OPCODE_MUL, V128Op, V128Op, V128Op>> {
@@ -1388,7 +1453,7 @@ struct DIV_F32 : Sequence<DIV_F32, I<OPCODE_DIV, F32Op, F32Op, F32Op>> {
       e.mov(e.w0, static_cast<uint64_t>(c.u));
       e.fmov(e.s1, e.w0);
     }
-    EmitFpBinOpWithPpcNan(e, i.dest, s1, s2, FpBinOp::Div);
+    EmitFpBinOpWithPpcNan(e, i.instr, i.dest, s1, s2, FpBinOp::Div);
   }
 };
 struct DIV_F64 : Sequence<DIV_F64, I<OPCODE_DIV, F64Op, F64Op, F64Op>> {
@@ -1413,7 +1478,7 @@ struct DIV_F64 : Sequence<DIV_F64, I<OPCODE_DIV, F64Op, F64Op, F64Op>> {
       e.mov(e.x0, c.u);
       e.fmov(e.d1, e.x0);
     }
-    EmitFpBinOpWithPpcNan(e, i.dest, s1, s2, FpBinOp::Div);
+    EmitFpBinOpWithPpcNan(e, i.instr, i.dest, s1, s2, FpBinOp::Div);
   }
 };
 struct DIV_V128 : Sequence<DIV_V128, I<OPCODE_DIV, V128Op, V128Op, V128Op>> {
