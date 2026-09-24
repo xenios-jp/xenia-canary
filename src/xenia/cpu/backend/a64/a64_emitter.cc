@@ -564,7 +564,8 @@ void A64Emitter::Trap(uint16_t trap_type) {
 
 void A64Emitter::b(const Xbyak_aarch64::Cond cond,
                    const Xbyak_aarch64::Label& label) {
-  if (IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
+  if (near_tail_branches_safe_ ||
+      IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
     CodeGenerator::b(cond, label);
     return;
   }
@@ -576,7 +577,8 @@ void A64Emitter::b(const Xbyak_aarch64::Cond cond,
 
 void A64Emitter::cbz(const Xbyak_aarch64::WReg& rt,
                      const Xbyak_aarch64::Label& label) {
-  if (IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
+  if (near_tail_branches_safe_ ||
+      IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
     CodeGenerator::cbz(rt, label);
     return;
   }
@@ -588,7 +590,8 @@ void A64Emitter::cbz(const Xbyak_aarch64::WReg& rt,
 
 void A64Emitter::cbz(const Xbyak_aarch64::XReg& rt,
                      const Xbyak_aarch64::Label& label) {
-  if (IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
+  if (near_tail_branches_safe_ ||
+      IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
     CodeGenerator::cbz(rt, label);
     return;
   }
@@ -600,7 +603,8 @@ void A64Emitter::cbz(const Xbyak_aarch64::XReg& rt,
 
 void A64Emitter::cbnz(const Xbyak_aarch64::WReg& rt,
                       const Xbyak_aarch64::Label& label) {
-  if (IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
+  if (near_tail_branches_safe_ ||
+      IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
     CodeGenerator::cbnz(rt, label);
     return;
   }
@@ -612,7 +616,8 @@ void A64Emitter::cbnz(const Xbyak_aarch64::WReg& rt,
 
 void A64Emitter::cbnz(const Xbyak_aarch64::XReg& rt,
                       const Xbyak_aarch64::Label& label) {
-  if (IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
+  if (near_tail_branches_safe_ ||
+      IsBoundLabelInRange(label, kCondBranchBackwardRange)) {
     CodeGenerator::cbnz(rt, label);
     return;
   }
@@ -624,7 +629,8 @@ void A64Emitter::cbnz(const Xbyak_aarch64::XReg& rt,
 
 void A64Emitter::tbz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
                      const Xbyak_aarch64::Label& label) {
-  if (IsBoundLabelInRange(label, kTestBranchBackwardRange)) {
+  if (near_tbz_branches_safe_ ||
+      IsBoundLabelInRange(label, kTestBranchBackwardRange)) {
     CodeGenerator::tbz(rt, imm, label);
     return;
   }
@@ -636,7 +642,8 @@ void A64Emitter::tbz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
 
 void A64Emitter::tbz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
                      const Xbyak_aarch64::Label& label) {
-  if (IsBoundLabelInRange(label, kTestBranchBackwardRange)) {
+  if (near_tbz_branches_safe_ ||
+      IsBoundLabelInRange(label, kTestBranchBackwardRange)) {
     CodeGenerator::tbz(rt, imm, label);
     return;
   }
@@ -648,7 +655,8 @@ void A64Emitter::tbz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
 
 void A64Emitter::tbnz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
                       const Xbyak_aarch64::Label& label) {
-  if (IsBoundLabelInRange(label, kTestBranchBackwardRange)) {
+  if (near_tbz_branches_safe_ ||
+      IsBoundLabelInRange(label, kTestBranchBackwardRange)) {
     CodeGenerator::tbnz(rt, imm, label);
     return;
   }
@@ -660,7 +668,8 @@ void A64Emitter::tbnz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
 
 void A64Emitter::tbnz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
                       const Xbyak_aarch64::Label& label) {
-  if (IsBoundLabelInRange(label, kTestBranchBackwardRange)) {
+  if (near_tbz_branches_safe_ ||
+      IsBoundLabelInRange(label, kTestBranchBackwardRange)) {
     CodeGenerator::tbnz(rt, imm, label);
     return;
   }
@@ -862,11 +871,7 @@ bool A64Emitter::TryInlinePPCGprLrSaveRestore(const hir::Instr* instr,
   // indirection lookup and, for a tail call, the stack teardown and jump.
   ldr(w15, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_RET_ADDR)));
   cmp(w16, w15);
-  if (near_tail_branches_safe_) {
-    b_near(EQ, epilog_label());
-  } else {
-    b(EQ, epilog_label());
-  }
+  b(EQ, epilog_label());
   CallIndirect(instr, 16);
   return true;
 }
@@ -881,11 +886,7 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
     // Compare target guest address with our function's return address.
     ldr(w0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_RET_ADDR)));
     cmp(target_w, w0);
-    if (near_tail_branches_safe_) {
-      b_near(EQ, epilog_label());
-    } else {
-      b(EQ, epilog_label());
-    }
+    b(EQ, epilog_label());
   }
 
   // Load host code address from indirection table.
@@ -1165,11 +1166,7 @@ void A64Emitter::EmitPreemptCheck(uint32_t guest_address) {
                          offsetof(ppc::PPCContext, last_safepoint_pc))));
   }
   ldrb(w8, ptr(x20, flag_offset));
-  if (near_tail_branches_safe_) {
-    cbnz_near(w8, do_yield);
-  } else {
-    cbnz(w8, do_yield);
-  }
+  cbnz(w8, do_yield);
   L(after);
 }
 

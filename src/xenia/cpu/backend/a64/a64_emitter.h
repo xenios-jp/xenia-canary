@@ -211,11 +211,12 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   // int64_t-immediate overloads remain available via the using-declarations
   // for hand-tuned thunks that pass literal byte offsets.
   //
-  // When the target label is already bound (backward branch — e.g. loop
-  // back-edges) the distance is known exactly, so a single direct branch is
-  // emitted whenever it is in range. This halves the hottest branches in
-  // guest code and keeps the natural taken/not-taken polarity for the
-  // branch predictor.
+  // A single direct branch is emitted whenever the target is provably in
+  // range: when the whole function is (near_tail_branches_safe_ and
+  // near_tbz_branches_safe_), and otherwise when the label is already bound
+  // (backward branch, e.g. a loop back-edge) and the distance is known. This
+  // halves the hottest branches in guest code and keeps the natural
+  // taken/not-taken polarity for the branch predictor.
   using Xbyak_aarch64::CodeGenerator::b;
   using Xbyak_aarch64::CodeGenerator::cbnz;
   using Xbyak_aarch64::CodeGenerator::cbz;
@@ -395,8 +396,9 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   Arena source_map_arena_;
 
   size_t stack_size_ = 0;
-  // Whether a forward branch to the epilog or the tail is provably within
-  // b.cond/cbnz reach (+/-1 MiB), and within tbnz reach (+/-32 KiB).
+  // Whether every branch within the function, to the epilog and the tail
+  // included, is provably within b.cond/cbnz reach (+/-1 MiB), and within
+  // tbz/tbnz reach (+/-32 KiB).
   bool near_tail_branches_safe_ = false;
   bool near_tbz_branches_safe_ = false;
 
