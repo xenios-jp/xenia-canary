@@ -147,6 +147,7 @@ struct SET_RETURN_ADDRESS
                I<OPCODE_SET_RETURN_ADDRESS, VoidOp, I64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
     e.SetReturnAddress(i.src1.constant());
+    e.MarkX0HoldsConstant(i.instr->next, i.src1.constant());
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_SET_RETURN_ADDRESS, SET_RETURN_ADDRESS);

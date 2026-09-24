@@ -297,6 +297,18 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     return true;
   }
 
+  // A guest call writes its return address twice from the same immediate:
+  // into the host stack slot and into the guest link register. The first
+  // leaves it in x0, and `reader`, the HIR instruction right after it, may
+  // store it from there. Nothing is emitted between two adjacent sequences.
+  void MarkX0HoldsConstant(const hir::Instr* reader, uint64_t value) {
+    x0_constant_reader_ = reader;
+    x0_constant_ = value;
+  }
+  bool X0HoldsConstant(const hir::Instr* reader, uint64_t value) const {
+    return reader == x0_constant_reader_ && value == x0_constant_;
+  }
+
   // w7 holds 0xE0000000 for the physical remap from its first use until the
   // next label, block or host call. Nothing else in the backend uses w7.
   bool physical_remap_bound_valid() const {
@@ -420,13 +432,18 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   }
   bool physical_remap_bound_valid_ = false;
   // Handoffs between adjacent sequences; see MarkFusedAddressMask.
-  void ResetSequenceHandoffs() { fused_addr_mask_dest_reg_ = -1; }
+  void ResetSequenceHandoffs() {
+    fused_addr_mask_dest_reg_ = -1;
+    x0_constant_reader_ = nullptr;
+  }
   bool sequence_handoff_pending() const {
     return fused_addr_mask_dest_reg_ >= 0;
   }
   int fused_addr_mask_dest_reg_ = -1;
   int fused_addr_mask_src_reg_ = -1;
   uint32_t fused_addr_mask_imm_ = 0;
+  const hir::Instr* x0_constant_reader_ = nullptr;
+  uint64_t x0_constant_ = 0;
   bool synchronize_stack_on_next_instruction_ = false;
 };
 
