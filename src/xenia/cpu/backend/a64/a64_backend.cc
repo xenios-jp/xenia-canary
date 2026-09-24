@@ -98,11 +98,27 @@ class A64HelperEmitter : public A64Emitter {
   void* EmitGuestAndHostSynchronizeStackHelper();
   void* EmitVRsqrtefpHelper(void** out_vector_entry);
   void* EmitFrsqrteHelper();
+
+ private:
+  // Clobbers x11/x12. Reads FPCR back first and skips the msr, which is
+  // context-synchronizing, when it already holds fpcr_fpu.
+  void EmitRestoreFpuFpcr();
 };
 
 A64HelperEmitter::A64HelperEmitter(A64Backend* backend,
                                    XbyakA64Allocator* allocator)
     : A64Emitter(backend, allocator) {}
+
+void A64HelperEmitter::EmitRestoreFpuFpcr() {
+  Xbyak_aarch64::Label fpcr_unchanged;
+  ldr(w11,
+      ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
+  mrs(x12, 3, 3, 4, 4, 0);  // mrs x12, FPCR
+  cmp(w11, w12);
+  b(Xbyak_aarch64::EQ, fpcr_unchanged);
+  msr(3, 3, 4, 4, 0, x11);
+  L(fpcr_unchanged);
+}
 
 // --------------------------------------------------------------------------
 // HostToGuestThunk
@@ -163,9 +179,7 @@ HostToGuestThunk A64HelperEmitter::EmitHostToGuestThunk() {
                         offsetof(ppc::PPCContext, virtual_membase))));
   // Restore the guest scalar FPCR on every host->guest entry so host-side
   // work done before the call can't leak a stale rounding / non-IEEE mode.
-  ldr(w11,
-      ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
-  msr(3, 3, 4, 4, 0, x11);
+  EmitRestoreFpuFpcr();
   // x0 still holds target, x2 holds return address.
   // The guest function's prolog stores x0 to GUEST_RET_ADDR on its stack
   // frame. Move the target to a scratch reg and put the guest return
@@ -302,9 +316,8 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
   // Host callbacks may change FPCR. Restore the guest scalar FPCR before
   // resuming the JIT so later guest ops observe the cached PPC mode.
   // x19 (backend context) is callee-saved, so it survives the host call.
-  ldr(w11,
-      ptr(x19, static_cast<uint32_t>(offsetof(A64BackendContext, fpcr_fpu))));
-  msr(3, 3, 4, 4, 0, x11);
+  // x0 holds the host return value here and must not be touched.
+  EmitRestoreFpuFpcr();
 
   code_offsets.epilog = getSize();
 
@@ -386,6 +399,10 @@ ResolveFunctionThunk A64HelperEmitter::EmitResolveFunctionThunk() {
   blr(x9);
   // x0 now holds the resolved host machine code address.
   mov(x9, x0);
+
+  // The resolved function is entered in the scalar FPU mode, and the host
+  // resolve may have changed FPCR.
+  EmitRestoreFpuFpcr();
 
   code_offsets.epilog = getSize();
 

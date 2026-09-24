@@ -50,8 +50,7 @@ inline void EmitWithFpcrMode(A64Emitter& e, FPCRMode mode, Fn&& emit_op) {
   // Enter the requested FPCR mode using tracked lazy switching.  If the
   // emitter is already in that mode (e.g. consecutive VMX ops in the same
   // basic block) this is a no-op — no system register access at all.
-  // FPU mode is restored at block boundaries and calls via ForgetFpcrMode,
-  // or on demand by scalar FP sequences via ChangeFpcrMode(Fpu).
+  // FPU mode is re-established at transitions and by scalar FP sequences.
   e.ChangeFpcrMode(mode);
   emit_op();
 }

@@ -105,7 +105,7 @@ bool A64Emitter::Emit(GuestFunction* function, hir::HIRBuilder* builder,
   source_map_arena_.Reset();
   tail_code_.clear();
   label_bind_offsets_.clear();
-  fpcr_mode_ = FPCRMode::Unknown;
+  fpcr_mode_ = FPCRMode::Fpu;
 
   // The prolog, epilog and helpers emit outside the per-opcode guard below, so
   // an unencodable operand needs catching here too.
@@ -141,6 +141,45 @@ bool A64Emitter::Emit(GuestFunction* function, hir::HIRBuilder* builder,
 }
 
 bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
+  // Count each block's incoming edges for the FPCR tracker, and note whether
+  // the function touches VEC128 at all.
+  function_has_vmx_ = false;
+  expected_preds_.clear();
+  incoming_fpcr_.clear();
+  for (auto* b = builder->first_block(); b; b = b->next) {
+    // Branches can sit mid-block, so every instruction is scanned.
+    for (auto* i = b->instr_head; i; i = i->next) {
+      if (const hir::Label* label = i->BranchLabel()) {
+        ++expected_preds_[label->block];
+      }
+      if (function_has_vmx_) {
+        continue;
+      }
+      if (i->dest && i->dest->type == hir::VEC128_TYPE) {
+        function_has_vmx_ = true;
+        continue;
+      }
+      uint32_t sig = i->opcode->signature;
+      const hir::Instr::Op* ops[3] = {&i->src1, &i->src2, &i->src3};
+      for (int k = 0; k < 3; ++k) {
+        auto t =
+            static_cast<hir::OpcodeSignatureType>((sig >> (3 * (k + 1))) & 0x7);
+        if (t == hir::OPCODE_SIG_TYPE_V &&
+            ops[k]->value->type == hir::VEC128_TYPE) {
+          function_has_vmx_ = true;
+          break;
+        }
+      }
+    }
+    auto* last = b->instr_tail;
+    if (b->next && !(last && last->opcode == &hir::OPCODE_BRANCH_info)) {
+      ++expected_preds_[b->next];
+    }
+  }
+  // The function entry is an edge too, and every function is entered in Fpu.
+  ++expected_preds_[builder->first_block()];
+  RecordIncomingFpcr(builder->first_block(), FPCRMode::Fpu);
+
   // Calculate local variable stack offsets.
   auto locals = builder->locals();
   size_t stack_offset = StackLayout::GUEST_STACK_SIZE;
@@ -217,9 +256,19 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   auto block = builder->first_block();
   synchronize_stack_on_next_instruction_ = false;
   while (block) {
-    // Reset FPCR tracking on each block entry (we don't know which
-    // predecessor ran, so mode is unknown).
-    ForgetFpcrMode();
+    // Start in the meet of the incoming modes once every incoming edge has
+    // been emitted. A loop header's back edge has not been, so it starts
+    // Unknown.
+    {
+      FPCRMode incoming = FPCRMode::Unknown;
+      auto exp_it = expected_preds_.find(block);
+      auto in_it = incoming_fpcr_.find(block);
+      if (exp_it != expected_preds_.end() && in_it != incoming_fpcr_.end() &&
+          in_it->second.count == exp_it->second) {
+        incoming = in_it->second.meet;
+      }
+      fpcr_mode_ = incoming;
+    }
     DropPhysicalRemapBound();
 
     // Bind all labels targeting this block.
@@ -248,6 +297,9 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
       bool selected = false;
       try {
         selected = SelectSequence(this, instr, &new_tail);
+        if (const hir::Label* label = instr->BranchLabel()) {
+          RecordIncomingFpcr(label->block, fpcr_mode_);
+        }
       } catch (const Xbyak_aarch64::Error& e) {
         // Uncaught this aborts the process with no context, so name the opcode
         // and the guest function and fail just this compile.
@@ -272,6 +324,10 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
       return false;
     }
 
+    auto* last = block->instr_tail;
+    if (block->next && !(last && last->opcode == &hir::OPCODE_BRANCH_info)) {
+      RecordIncomingFpcr(block->next, fpcr_mode_);
+    }
     block = block->next;
   }
 
@@ -312,6 +368,9 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
     // ARM64 instructions are always 4-byte aligned, so alignment is mostly
     // a no-op unless we want cache-line alignment for hot paths.
     L(tail_item.label);
+    // Tail code runs in whatever mode its branch site held, not the mode the
+    // last block ended in.
+    fpcr_mode_ = FPCRMode::Unknown;
     try {
       tail_item.func(*this, tail_item.label);
     } catch (const Xbyak_aarch64::Error& e) {
@@ -598,7 +657,7 @@ void A64Emitter::UnimplementedInstr(const hir::Instr* i) {
 
 void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
   assert_not_null(function);
-  ForgetFpcrMode();
+  EnsureFpuFpcrModeForTransition();
   DropPhysicalRemapBound();
   if (TryInlinePPCGprLrSaveRestore(instr, function)) {
     return;
@@ -765,7 +824,7 @@ bool A64Emitter::TryInlinePPCGprLrSaveRestore(const hir::Instr* instr,
 }
 
 void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
-  ForgetFpcrMode();
+  EnsureFpuFpcrModeForTransition();
   DropPhysicalRemapBound();
   auto target_w = WReg(reg_index);
 
@@ -866,7 +925,7 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
 }
 
 void A64Emitter::CallExtern(const hir::Instr* instr, const Function* function) {
-  ForgetFpcrMode();
+  EnsureFpuFpcrModeForTransition();
   DropPhysicalRemapBound();
   bool undefined = true;
   if (function->behavior() == Function::Behavior::kBuiltin) {
@@ -935,11 +994,16 @@ void A64Emitter::CallNative(void* fn) { CallNativeSafe(fn); }
 
 void A64Emitter::CallNativeSafe(void* fn) {
   DropPhysicalRemapBound();
+  // Sequences may emit this on a conditional path, so the mode after it is the
+  // meet of the call path (Fpu) and the mode on entry.
+  const FPCRMode entry_mode = fpcr_mode_;
+  EnsureFpuFpcrModeForTransition();
   // GuestToHostThunk: x0=target function, x1/x2=args (set by caller).
   // The thunk rearranges: saves x0 in x9, sets x0=context, calls x9.
   mov(x0, reinterpret_cast<uint64_t>(fn));
   mov(x9, reinterpret_cast<uint64_t>(backend()->guest_to_host_thunk()));
   blr(x9);
+  MergeFpcrModeAfterConditional(entry_mode);
 }
 
 void A64Emitter::SetReturnAddress(uint64_t value) {
@@ -1029,9 +1093,7 @@ uint32_t A64Emitter::MapReg(const hir::Value* v, const uint32_t* map, int count,
 }
 
 void A64Emitter::EmitPreemptCheck(uint32_t guest_address) {
-  // Only safe at a block head, where the per-block register allocator leaves no
-  // guest value live and ForgetFpcrMode has already run, so the unannounced
-  // guest->host call cannot lose a register or desync the mode tracking.
+  // Only safe at a block head, where no guest value is live in a register.
   //
   // Tests the preempt flag other threads raise. The cold path clears it, a
   // deferred yield re-sets it.
@@ -1040,7 +1102,10 @@ void A64Emitter::EmitPreemptCheck(uint32_t guest_address) {
   static_assert(offsetof(ppc::PPCContext, preempt_requested) < 4096);
   const uint32_t flag_offset =
       static_cast<uint32_t>(offsetof(ppc::PPCContext, preempt_requested));
-  Label& do_yield = AddToTail([&after, flag_offset](A64Emitter& e, Label&) {
+  // The thunk returns in Fpu, while the hot path may hold a VMX mode.
+  const FPCRMode held_mode = fpcr_mode_;
+  Label& do_yield = AddToTail([&after, flag_offset, held_mode](A64Emitter& e,
+                                                               Label&) {
     e.strb(e.wzr, ptr(e.x20, flag_offset));
     // Null until the scheduler starts, and a stale flag can reach here after
     // it shuts down, so check before calling.
@@ -1050,6 +1115,9 @@ void A64Emitter::EmitPreemptCheck(uint32_t guest_address) {
     e.cbz(e.x0, after);
     e.mov(e.x9, reinterpret_cast<uint64_t>(e.backend()->guest_to_host_thunk()));
     e.blr(e.x9);
+    if (held_mode != FPCRMode::Unknown && held_mode != FPCRMode::Fpu) {
+      e.ReloadFpcrMode(held_mode);
+    }
     e.b(after);
   });
   if (cvars::log_safepoint_pc && guest_address) {

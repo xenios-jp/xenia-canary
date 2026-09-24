@@ -155,11 +155,33 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
 
   static void HandleStackpointOverflowError(ppc::PPCContext* context);
 
+  void MergeFpcrModeAfterConditional(FPCRMode skip_path_mode) {
+    if (fpcr_mode_ != skip_path_mode) {
+      fpcr_mode_ = FPCRMode::Unknown;
+    }
+  }
+  FPCRMode fpcr_mode() const { return fpcr_mode_; }
   void ForgetFpcrMode() {
     if (IsVmxFpcrMode(fpcr_mode_)) {
       ChangeFpcrMode(FPCRMode::Fpu);
     }
     fpcr_mode_ = FPCRMode::Unknown;
+  }
+  // For cold paths whose host call clobbered the mode the tracker still holds.
+  void ReloadFpcrMode(FPCRMode mode) {
+    fpcr_mode_ = FPCRMode::Unknown;
+    ChangeFpcrMode(mode);
+    fpcr_mode_ = mode;
+  }
+  // Every guest function is entered and left, and every host call made, in
+  // the scalar (Fpu) mode. Unknown may be VMX at runtime, but only in a
+  // function that touches VEC128.
+  void EnsureFpuFpcrModeForTransition() {
+    if (IsVmxFpcrMode(fpcr_mode_) ||
+        (fpcr_mode_ == FPCRMode::Unknown && function_has_vmx_)) {
+      ChangeFpcrMode(FPCRMode::Fpu);
+    }
+    fpcr_mode_ = FPCRMode::Fpu;
   }
   bool ChangeFpcrMode(FPCRMode new_mode, bool already_set = false);
   bool IsFeatureEnabled(uint64_t feature_flag) const {
@@ -341,6 +363,25 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   static constexpr int64_t kTestBranchBackwardRange = (1ll << 15) - 8;
 
   FPCRMode fpcr_mode_ = FPCRMode::Unknown;
+  bool function_has_vmx_ = false;
+  // FPCR tracking across blocks: lattice {Unknown, Fpu, Vmx, VmxDaz}, where
+  // meet(a, b) = a if a == b else Unknown. A block starts in the meet of its
+  // incoming edges once all of them have been emitted, else Unknown.
+  struct IncomingFpcr {
+    FPCRMode meet = FPCRMode::Unknown;
+    uint32_t count = 0;
+  };
+  std::unordered_map<const hir::Block*, uint32_t> expected_preds_;
+  std::unordered_map<const hir::Block*, IncomingFpcr> incoming_fpcr_;
+  void RecordIncomingFpcr(const hir::Block* target, FPCRMode mode) {
+    auto& in = incoming_fpcr_[target];
+    if (in.count == 0) {
+      in.meet = mode;
+    } else if (in.meet != mode) {
+      in.meet = FPCRMode::Unknown;
+    }
+    ++in.count;
+  }
   bool physical_remap_bound_valid_ = false;
   bool synchronize_stack_on_next_instruction_ = false;
 };
