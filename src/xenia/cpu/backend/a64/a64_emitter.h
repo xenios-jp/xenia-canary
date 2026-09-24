@@ -163,7 +163,7 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
 
   void MergeFpcrModeAfterConditional(FPCRMode skip_path_mode) {
     if (fpcr_mode_ != skip_path_mode) {
-      fpcr_mode_ = FPCRMode::Unknown;
+      fpcr_mode_ = UntrackedFpcrMode();
     }
   }
   FPCRMode fpcr_mode() const { return fpcr_mode_; }
@@ -171,7 +171,13 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     if (IsVmxFpcrMode(fpcr_mode_)) {
       ChangeFpcrMode(FPCRMode::Fpu);
     }
-    fpcr_mode_ = FPCRMode::Unknown;
+    fpcr_mode_ = UntrackedFpcrMode();
+  }
+  // The mode to assume where the tracker cannot follow the paths in, such as
+  // a loop header. Only a function that touches VEC128 ever enters a VMX
+  // mode, so in any other the FPCR holds the Fpu mode throughout.
+  FPCRMode UntrackedFpcrMode() const {
+    return function_has_vmx_ ? FPCRMode::Unknown : FPCRMode::Fpu;
   }
   // For cold paths whose host call clobbered the mode the tracker still holds.
   void ReloadFpcrMode(FPCRMode mode) {

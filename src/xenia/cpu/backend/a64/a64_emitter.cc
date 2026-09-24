@@ -267,7 +267,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   while (block) {
     // Start in the meet of the incoming states once every incoming edge has
     // been emitted. A loop header's back edge has not been, so it starts
-    // with the FPCR mode Unknown and the remap bound not loaded.
+    // with the FPCR mode untracked and the remap bound not loaded.
     FPCRMode incoming_fpcr = FPCRMode::Unknown;
     bool incoming_remap_bound = false;
     {
@@ -279,7 +279,8 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
         incoming_remap_bound = in_it->second.remap_bound_valid;
       }
     }
-    fpcr_mode_ = incoming_fpcr;
+    fpcr_mode_ = incoming_fpcr == FPCRMode::Unknown ? UntrackedFpcrMode()
+                                                    : incoming_fpcr;
 
     // Bind all labels targeting this block.
     auto label = block->label_head;
@@ -397,7 +398,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
     L(tail_item.label);
     // Tail code runs in whatever mode its branch site held, not the mode the
     // last block ended in.
-    fpcr_mode_ = FPCRMode::Unknown;
+    fpcr_mode_ = UntrackedFpcrMode();
     try {
       tail_item.func(*this, tail_item.label);
     } catch (const Xbyak_aarch64::Error& e) {
