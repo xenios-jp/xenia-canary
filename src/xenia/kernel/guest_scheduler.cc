@@ -148,6 +148,10 @@ static void PreemptCurrentFiber(void* /*raw_context*/) {
   }
   auto* context = self->thread_state()->context();
   auto& links = self->scheduler_links();
+  // Yielding would end its freeze, and nothing else may run meanwhile.
+  if (self->kernel_state()->guest_scheduler()->freezer() == self) {
+    return;
+  }
   // A co-resident fiber would re-enter the recursive lock on this host thread,
   // silently breaking mutual exclusion, so this one is never forced. Report a
   // fiber stuck here instead - it means guest code is spinning under the global
@@ -278,6 +282,7 @@ void GuestScheduler::EnsureStarted() {
   for (int i = 0; i < kMaxCpus; ++i) {
     cpus_[i].ready_event = xe::threading::Event::CreateAutoResetEvent(false);
   }
+  thaw_event_ = xe::threading::Event::CreateManualResetEvent(true);
   if (quantum_ticks_) {
     watchdog_event_ = xe::threading::Event::CreateAutoResetEvent(false);
     xe::threading::Thread::CreationParameters params;
@@ -302,6 +307,7 @@ void GuestScheduler::Shutdown() {
     return;
   }
   shutting_down_.store(true);
+  Thaw();
   for (Cpu& cpu : cpus_) {
     if (cpu.ready_event) {
       cpu.ready_event->Set();
@@ -992,6 +998,9 @@ bool GuestScheduler::YieldCurrentThread(bool quantum_end, bool to_lower) {
   // An externally terminated thread stops here.
   ExitIfTerminated();
   XThread* self = XThread::GetCurrentThread();
+  if (freezer_.load(std::memory_order_relaxed) == self) {
+    Thaw();
+  }
   auto& links = self->scheduler_links();
   // Neither a preemption nor a re-poll wake is a quantum end, so both resume at
   // the head with the rest of the slice and no decay.
@@ -1356,6 +1365,9 @@ void GuestScheduler::BlockCurrentThread(uint64_t deadline_ms,
     ExitIfTerminated();
   }
   XThread* self = XThread::GetCurrentThread();
+  if (freezer_.load(std::memory_order_relaxed) == self) {
+    Thaw();
+  }
   int cpu_index = t_current_cpu;
   // Gate only types whose every satisfying transition calls
   // WakeCooperativeWaiters, anything else polls every pass.
@@ -1546,6 +1558,12 @@ void GuestScheduler::RunLoop(int cpu_index) {
   XELOGI("GuestScheduler: CPU {} dispatch loop started", cpu_index);
 
   while (!shutting_down_.load()) {
+    if (freezer_.load(std::memory_order_acquire) && cpu_index != freezer_cpu_) {
+      frozen_cpus_.fetch_add(1);
+      xe::threading::Wait(thaw_event_.get(), false);
+      frozen_cpus_.fetch_sub(1);
+      continue;
+    }
     if (cpu_index == 0) {
       ReportStatsIfDue();
     }
@@ -1677,6 +1695,55 @@ void GuestScheduler::EnterBackgroundMode() {
   }
   if (opened) {
     stats_.background_windows.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+bool GuestScheduler::FreezeOthers(std::chrono::milliseconds timeout) {
+  XThread* self = XThread::GetCurrentFiberThread();
+  if (!self || !started_.load() || shutting_down_.load() || freezer_.load()) {
+    return false;
+  }
+  thaw_event_->Reset();
+  {
+    std::lock_guard<std::mutex> lock(lock_);
+    freezer_cpu_ = t_current_cpu;
+    freezer_.store(self, std::memory_order_release);
+    for (int i = 0; i < kMaxCpus; ++i) {
+      if (i != t_current_cpu && cpus_[i].current_thread) {
+        cpus_[i].current_thread->thread_state()->context()->preempt_requested =
+            1;
+      }
+    }
+  }
+  // Idle CPUs only see the freeze once woken.
+  for (int i = 0; i < kMaxCpus; ++i) {
+    if (i != t_current_cpu) {
+      cpus_[i].ready_event->Set();
+    }
+  }
+  const uint64_t deadline = Clock::QueryHostUptimeMillis() + timeout.count();
+  while (frozen_cpus_.load() < kMaxCpus - 1) {
+    if (Clock::QueryHostUptimeMillis() >= deadline) {
+      return false;
+    }
+    xe::threading::MaybeYield();
+  }
+  return true;
+}
+
+bool GuestScheduler::Thaw() {
+  if (!freezer_.exchange(nullptr)) {
+    return false;
+  }
+  thaw_event_->Set();
+  return true;
+}
+
+void GuestScheduler::SampleProgramCounters(std::vector<uint64_t>* pcs) const {
+  for (const Cpu& cpu : cpus_) {
+    if (cpu.host_thread) {
+      pcs->push_back(cpu.host_thread->SampleProgramCounter());
+    }
   }
 }
 

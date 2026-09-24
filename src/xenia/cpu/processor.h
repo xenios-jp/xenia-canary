@@ -74,6 +74,9 @@ class Processor {
   ppc::PPCFrontend* frontend() const { return frontend_.get(); }
   backend::Backend* backend() const { return backend_.get(); }
   ExportResolver* export_resolver() const { return export_resolver_; }
+  JitCorpusWriter* jit_corpus_writer() const {
+    return jit_corpus_writer_.get();
+  }
 
   bool Setup(std::unique_ptr<backend::Backend> backend);
 

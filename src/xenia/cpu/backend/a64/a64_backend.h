@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <unordered_map>
 
 #include "xenia/base/bit_map.h"
 #include "xenia/base/cvar.h"
@@ -184,6 +185,9 @@ class A64Backend : public Backend {
   void InstallBreakpoint(Breakpoint* breakpoint) override;
   void InstallBreakpoint(Breakpoint* breakpoint, Function* fn) override;
   void UninstallBreakpoint(Breakpoint* breakpoint) override;
+  bool HookFunctionEntry(GuestFunction* function,
+                         FunctionEntryHook hook) override;
+  void UnhookFunctionEntry(GuestFunction* function) override;
   void InitializeBackendContext(void* ctx) override;
   void DeinitializeBackendContext(void* ctx) override;
   void PrepareForReentry(void* ctx) override;
@@ -244,6 +248,8 @@ class A64Backend : public Backend {
   BitMap guest_trampoline_address_bitmap_;
   uint8_t* guest_trampoline_memory_ = nullptr;
   bool guest_trampolines_sub4gb_ = false;
+  // The first instruction of each hooked function, which the hook replaced.
+  std::unordered_map<GuestFunction*, uint32_t> entry_hooks_;
 };
 
 }  // namespace a64
