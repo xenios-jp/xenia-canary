@@ -122,6 +122,14 @@ struct A64BackendContext {
   ReserveHelper* reserve_helper_;
   uint64_t cached_reserve_value_;
   uint64_t* guest_tick_count;
+  // Fixed for the life of the process, so generated code loads them with one
+  // ldr instead of building each as an immediate.
+  uint64_t indirection_table_bias;
+  uint64_t code_execute_base;
+  uint64_t external_indirection_table;
+  uint64_t guest_to_host_thunk_address;
+  // Same thunk without the q4-q31 save/restore, for CallExtern.
+  uint64_t guest_to_host_thunk_no_vec_address;
   A64BackendStackpoint* stackpoints;
   // allocated by the first dynamic call resolve on this thread
   A64DynamicCallCacheEntry* dynamic_call_cache;
@@ -159,7 +167,6 @@ class A64Backend : public Backend {
   std::string name() const override { return "a64"; }
 
   HostToGuestThunk host_to_guest_thunk() const { return host_to_guest_thunk_; }
-  GuestToHostThunk guest_to_host_thunk() const { return guest_to_host_thunk_; }
   ResolveFunctionThunk resolve_function_thunk() const {
     return resolve_function_thunk_;
   }
@@ -235,6 +242,7 @@ class A64Backend : public Backend {
 
   HostToGuestThunk host_to_guest_thunk_ = nullptr;
   GuestToHostThunk guest_to_host_thunk_ = nullptr;
+  GuestToHostThunk guest_to_host_thunk_no_vec_ = nullptr;
   ResolveFunctionThunk resolve_function_thunk_ = nullptr;
   void* synchronize_guest_and_host_stack_helper_ = nullptr;
   void* vrsqrtefp_scalar_helper_ = nullptr;

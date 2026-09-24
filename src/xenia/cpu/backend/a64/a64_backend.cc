@@ -94,12 +94,15 @@ class A64HelperEmitter : public A64Emitter {
 
   HostToGuestThunk EmitHostToGuestThunk();
   GuestToHostThunk EmitGuestToHostThunk();
+  GuestToHostThunk EmitGuestToHostThunkNoVec();
   ResolveFunctionThunk EmitResolveFunctionThunk();
   void* EmitGuestAndHostSynchronizeStackHelper();
   void* EmitVRsqrtefpHelper(void** out_vector_entry);
   void* EmitFrsqrteHelper();
 
  private:
+  // Clobbers x11. Installs the AAPCS64 default FPCR for host code.
+  void EmitEnterHostFpcr();
   // Clobbers x11/x12. Reads FPCR back first and skips the msr, which is
   // context-synchronizing, when it already holds fpcr_fpu.
   void EmitRestoreFpuFpcr();
@@ -108,6 +111,17 @@ class A64HelperEmitter : public A64Emitter {
 A64HelperEmitter::A64HelperEmitter(A64Backend* backend,
                                    XbyakA64Allocator* allocator)
     : A64Emitter(backend, allocator) {}
+
+void A64HelperEmitter::EmitEnterHostFpcr() {
+  // Host C code runs with the AAPCS64 default FPCR (round to nearest, no
+  // flush-to-zero), not the guest's scalar mode: mtfsf can put rounding
+  // controls or FPSCR.NI (FZ) in fpcr_fpu, which host code must not inherit.
+  Xbyak_aarch64::Label host_fpcr_ready;
+  mrs(x11, 3, 3, 4, 4, 0);  // mrs x11, FPCR
+  cbz(x11, host_fpcr_ready);
+  msr(3, 3, 4, 4, 0, xzr);
+  L(host_fpcr_ready);
+}
 
 void A64HelperEmitter::EmitRestoreFpuFpcr() {
   Xbyak_aarch64::Label fpcr_unchanged;
@@ -297,14 +311,7 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
 
   code_offsets.body = getSize();
 
-  // Host C code runs with the AAPCS64 default FPCR (round to nearest, no
-  // flush-to-zero), not the guest's scalar mode: mtfsf can put rounding
-  // controls or FPSCR.NI (FZ) in fpcr_fpu, which host code must not inherit.
-  Xbyak_aarch64::Label host_fpcr_ready;
-  mrs(x11, 3, 3, 4, 4, 0);  // mrs x11, FPCR
-  cbz(x11, host_fpcr_ready);
-  msr(3, 3, 4, 4, 0, xzr);
-  L(host_fpcr_ready);
+  EmitEnterHostFpcr();
 
   // Call host function.
   // AAPCS64: x0=first arg. We set x0=context (from x20).
@@ -353,6 +360,62 @@ GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunk() {
       code_offsets.prolog_stack_alloc - code_offsets.prolog;
   func_info.stack_size = g2h_stack;
   func_info.lr_save_offset = 0x1C8;  // stp x29, x30, [sp, #0x1C0]
+
+  void* fn = Emplace(func_info);
+  return reinterpret_cast<GuestToHostThunk>(fn);
+}
+
+// --------------------------------------------------------------------------
+// GuestToHostThunkNoVec
+// --------------------------------------------------------------------------
+// GuestToHostThunk without the q4-q31 save/restore, for CallExtern. No HIR
+// value is live in a vector register across a call: guest-to-guest calls are
+// a bare blr into a callee that uses q4-q31 freely, and ContextPromotionPass
+// stops at the first volatile instruction. A pass that hoists a value across
+// a call would break this. CallNativeSafe, which sequences emit with operands
+// in flight, keeps the full thunk.
+GuestToHostThunk A64HelperEmitter::EmitGuestToHostThunkNoVec() {
+  struct {
+    size_t prolog;
+    size_t prolog_stack_alloc;
+    size_t body;
+    size_t epilog;
+    size_t tail;
+  } code_offsets = {};
+
+  code_offsets.prolog = getSize();
+
+  const size_t g2h_stack = 16;  // x29/x30 only
+  sub(sp, sp, static_cast<uint32_t>(g2h_stack));
+  code_offsets.prolog_stack_alloc = getSize();
+  stp(x29, x30, ptr(sp, 0x00));
+
+  code_offsets.body = getSize();
+
+  EmitEnterHostFpcr();
+  mov(x9, x0);   // x9 = target function (scratch)
+  mov(x0, x20);  // x0 = PPCContext*
+  blr(x9);
+  EmitRestoreFpuFpcr();
+
+  code_offsets.epilog = getSize();
+
+  ldp(x29, x30, ptr(sp, 0x00));
+  add(sp, sp, static_cast<uint32_t>(g2h_stack));
+  ret();
+
+  code_offsets.tail = getSize();
+
+  EmitFunctionInfo func_info = {};
+  func_info.code_size.total = getSize();
+  func_info.code_size.prolog = code_offsets.body - code_offsets.prolog;
+  func_info.code_size.body = code_offsets.epilog - code_offsets.body;
+  func_info.code_size.epilog = code_offsets.tail - code_offsets.epilog;
+  func_info.code_size.tail = getSize() - code_offsets.tail;
+  func_info.prolog_stack_alloc_offset =
+      code_offsets.prolog_stack_alloc - code_offsets.prolog;
+  func_info.stack_size = g2h_stack;
+  func_info.lr_save_offset = 0x08;  // stp x29, x30, [sp, #0x00]
 
   void* fn = Emplace(func_info);
   return reinterpret_cast<GuestToHostThunk>(fn);
@@ -1263,10 +1326,11 @@ bool A64Backend::Initialize(Processor* processor) {
 
   host_to_guest_thunk_ = thunk_emitter.EmitHostToGuestThunk();
   guest_to_host_thunk_ = thunk_emitter.EmitGuestToHostThunk();
+  guest_to_host_thunk_no_vec_ = thunk_emitter.EmitGuestToHostThunkNoVec();
   resolve_function_thunk_ = thunk_emitter.EmitResolveFunctionThunk();
 
   if (!host_to_guest_thunk_ || !guest_to_host_thunk_ ||
-      !resolve_function_thunk_) {
+      !guest_to_host_thunk_no_vec_ || !resolve_function_thunk_) {
     XELOGE("A64Backend: Failed to generate thunks");
     return false;
   }
@@ -1487,6 +1551,15 @@ void A64Backend::InitializeBackendContext(void* ctx) {
   a64_ctx->fpcr_vmx_daz = DEFAULT_VMX_FPCR;   // never follows NJM
   a64_ctx->flags = (1U << kA64BackendNJMOn);  // NJM on by default
   a64_ctx->guest_tick_count = Clock::GetGuestTickCountPointer();
+  auto* cache = code_cache_.get();
+  a64_ctx->indirection_table_bias = cache->indirection_table_base_bias();
+  a64_ctx->code_execute_base = cache->execute_base_address();
+  a64_ctx->external_indirection_table =
+      cache->external_indirection_table_base_address();
+  a64_ctx->guest_to_host_thunk_address =
+      reinterpret_cast<uint64_t>(guest_to_host_thunk_);
+  a64_ctx->guest_to_host_thunk_no_vec_address =
+      reinterpret_cast<uint64_t>(guest_to_host_thunk_no_vec_);
 
   auto set_est = [&](int index, float value) {
     uint32_t bits;

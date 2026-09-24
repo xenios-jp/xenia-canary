@@ -128,6 +128,8 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
 
   void Call(const hir::Instr* instr, GuestFunction* function);
   void CallIndirect(const hir::Instr* instr, int reg_index);
+  // w16 = guest address in, x9 = host target out; clobbers x14/x15.
+  void EmitEncodedIndirectionLookup();
   void CallExtern(const hir::Instr* instr, const Function* function);
   // Emits a PPC __savegprlr_N/__restgprlr_N helper body inline instead of
   // calling it. Returns false when the callee is not a GPR saverest helper.
@@ -142,6 +144,10 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   // Backend context register = x19.
   // Points to A64BackendContext (immediately before PPCContext in memory).
   const Xbyak_aarch64::XReg& GetBackendCtxReg() const { return x19; }
+  // Operand for an A64BackendContext field; offset comes from offsetof.
+  Xbyak_aarch64::AdrUimm BackendCtxPtr(size_t offset) const {
+    return Xbyak_aarch64::ptr(x19, static_cast<uint32_t>(offset));
+  }
   // Context register = x20.
   const Xbyak_aarch64::XReg& GetContextReg() const { return x20; }
   // Memory base register = x21.
@@ -256,6 +262,12 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     CodeGenerator::cbnz(rt, label);
   }
 
+  // +/-32 KiB only; guard with near_tbz_branches_safe_.
+  void tbnz_near(const Xbyak_aarch64::WReg& rt, uint32_t bit,
+                 const Xbyak_aarch64::Label& label) {
+    CodeGenerator::tbnz(rt, bit, label);
+  }
+
   // Shadow of CodeGenerator::L that records the bind offset so later
   // branches to this label can be emitted in single-instruction form.
   void L(Xbyak_aarch64::Label& label) {
@@ -318,6 +330,10 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   Arena source_map_arena_;
 
   size_t stack_size_ = 0;
+  // Whether a forward branch to the epilog or the tail is provably within
+  // b.cond/cbnz reach (+/-1 MiB), and within tbnz reach (+/-32 KiB).
+  bool near_tail_branches_safe_ = false;
+  bool near_tbz_branches_safe_ = false;
 
   static const uint32_t gpr_reg_map_[GPR_COUNT];
   static const uint32_t vec_reg_map_[VEC_COUNT];

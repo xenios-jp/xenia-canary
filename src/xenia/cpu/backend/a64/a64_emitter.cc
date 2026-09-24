@@ -146,9 +146,11 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   function_has_vmx_ = false;
   expected_preds_.clear();
   incoming_fpcr_.clear();
+  size_t hir_instr_count = 0;
   for (auto* b = builder->first_block(); b; b = b->next) {
     // Branches can sit mid-block, so every instruction is scanned.
     for (auto* i = b->instr_head; i; i = i->next) {
+      ++hir_instr_count;
       if (const hir::Label* label = i->BranchLabel()) {
         ++expected_preds_[label->block];
       }
@@ -179,6 +181,12 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   // The function entry is an edge too, and every function is entered in Fpu.
   ++expected_preds_[builder->first_block()];
   RecordIncomingFpcr(builder->first_block(), FPCRMode::Fpu);
+  // 256 bytes per HIR instruction bounds the body, the tail and the literal
+  // pool islands. Should that bound ever be wrong, xbyak_aarch64 rejects the
+  // out-of-range branch when the label is bound (ERR_LABEL_IS_TOO_FAR), and
+  // the throw fails this function's compile.
+  near_tail_branches_safe_ = hir_instr_count * 256 < (768 * 1024);
+  near_tbz_branches_safe_ = hir_instr_count * 256 < (24 * 1024);
 
   // Calculate local variable stack offsets.
   auto locals = builder->locals();
@@ -655,6 +663,51 @@ void A64Emitter::UnimplementedInstr(const hir::Instr* i) {
   DebugBreak();
 }
 
+void A64Emitter::EmitEncodedIndirectionLookup() {
+  // Encoded path: see A64CodeCache for the entry format.
+  static_assert(offsetof(A64BackendContext, indirection_table_bias) < 4096 &&
+                offsetof(A64BackendContext, code_execute_base) < 4096 &&
+                offsetof(A64BackendContext, external_indirection_table) < 4096);
+  ldr(x14, BackendCtxPtr(offsetof(A64BackendContext, indirection_table_bias)));
+  add(x14, x14, w16, UXTW);
+  ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
+
+  // External: tagged index into the side table. Cold, so it goes to the tail
+  // when tbnz can provably reach it.
+  auto emit_external = [](A64Emitter& e) {
+    e.and_(e.w15, e.w9, A64CodeCache::kIndirectionExternalIndexMask);
+    e.ldr(e.x14, e.BackendCtxPtr(
+                     offsetof(A64BackendContext, external_indirection_table)));
+    e.add(e.x14, e.x14, e.x15, LSL, 3);
+    e.ldr(e.x9, ptr(e.x14, static_cast<uint32_t>(0)));
+  };
+  auto emit_internal = [](A64Emitter& e) {
+    // Internal: rel32 from code cache base.
+    e.ldr(e.x14,
+          e.BackendCtxPtr(offsetof(A64BackendContext, code_execute_base)));
+    e.add(e.x9, e.x14, e.w9, UXTW);
+  };
+  auto& indirection_ready = NewCachedLabel();
+  if (near_tbz_branches_safe_) {
+    auto& external_target =
+        AddToTail([emit_external, &indirection_ready](A64Emitter& e, Label&) {
+          emit_external(e);
+          e.b(indirection_ready);
+        });
+    tbnz_near(w9, 31, external_target);
+    emit_internal(*this);
+  } else {
+    // Bound a few instructions later, so the short form reaches it.
+    auto& external_target = NewCachedLabel();
+    tbnz_near(w9, 31, external_target);
+    emit_internal(*this);
+    b(indirection_ready);
+    L(external_target);
+    emit_external(*this);
+  }
+  L(indirection_ready);
+}
+
 void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
   assert_not_null(function);
   EnsureFpuFpcrModeForTransition();
@@ -698,29 +751,7 @@ void A64Emitter::Call(const hir::Instr* instr, GuestFunction* function) {
       // 32-bit host target.
       ldr(w9, ptr(x16, static_cast<uint32_t>(0)));
     } else {
-      // Encoded path: see A64CodeCache for the entry format.
-      Label external_target;
-      Label indirection_ready;
-
-      mov(x14, code_cache_->indirection_table_base_bias());
-      add(x14, x14, w16, UXTW);
-      ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
-      tbnz(w9, 31, external_target);
-
-      // Internal: rel32 from code cache base.
-      mov(x14, code_cache_->execute_base_address());
-      add(x9, x14, w9, UXTW);
-      b(indirection_ready);
-
-      // External: tagged index into the side table.
-      L(external_target);
-      and_(w15, w9, A64CodeCache::kIndirectionExternalIndexMask);
-      mov(x14, code_cache_->external_indirection_table_base_address());
-      lsl(x15, x15, 3);
-      add(x14, x14, x15);
-      ldr(x9, ptr(x14, static_cast<uint32_t>(0)));
-
-      L(indirection_ready);
+      EmitEncodedIndirectionLookup();
     }
   } else if (code_cache_->has_indirection_table()) {
     mov(w16, function->address());
@@ -818,7 +849,11 @@ bool A64Emitter::TryInlinePPCGprLrSaveRestore(const hir::Instr* instr,
   // indirection lookup and, for a tail call, the stack teardown and jump.
   ldr(w15, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_RET_ADDR)));
   cmp(w16, w15);
-  b(EQ, epilog_label());
+  if (near_tail_branches_safe_) {
+    b_near(EQ, epilog_label());
+  } else {
+    b(EQ, epilog_label());
+  }
   CallIndirect(instr, 16);
   return true;
 }
@@ -833,7 +868,11 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
     // Compare target guest address with our function's return address.
     ldr(w0, ptr(sp, static_cast<uint32_t>(StackLayout::GUEST_RET_ADDR)));
     cmp(target_w, w0);
-    b(EQ, epilog_label());
+    if (near_tail_branches_safe_) {
+      b_near(EQ, epilog_label());
+    } else {
+      b(EQ, epilog_label());
+    }
   }
 
   // Load host code address from indirection table.
@@ -867,29 +906,7 @@ void A64Emitter::CallIndirect(const hir::Instr* instr, int reg_index) {
       // 32-bit host target.
       ldr(w9, ptr(x16, static_cast<uint32_t>(0)));
     } else {
-      // Encoded path: see A64CodeCache for the entry format.
-      Label external_target;
-      Label indirection_ready;
-
-      mov(x14, code_cache_->indirection_table_base_bias());
-      add(x14, x14, w16, UXTW);
-      ldr(w9, ptr(x14, static_cast<uint32_t>(0)));
-      tbnz(w9, 31, external_target);
-
-      // Internal: rel32 from code cache base.
-      mov(x14, code_cache_->execute_base_address());
-      add(x9, x14, w9, UXTW);
-      b(indirection_ready);
-
-      // External: tagged index into the side table.
-      L(external_target);
-      and_(w15, w9, A64CodeCache::kIndirectionExternalIndexMask);
-      mov(x14, code_cache_->external_indirection_table_base_address());
-      lsl(x15, x15, 3);
-      add(x14, x14, x15);
-      ldr(x9, ptr(x14, static_cast<uint32_t>(0)));
-
-      L(indirection_ready);
+      EmitEncodedIndirectionLookup();
     }
     if (target_ready) {
       L(*target_ready);
@@ -937,7 +954,10 @@ void A64Emitter::CallExtern(const hir::Instr* instr, const Function* function) {
       mov(x0, reinterpret_cast<uint64_t>(builtin_function->handler()));
       mov(x1, reinterpret_cast<uint64_t>(builtin_function->arg0()));
       mov(x2, reinterpret_cast<uint64_t>(builtin_function->arg1()));
-      mov(x9, reinterpret_cast<uint64_t>(backend()->guest_to_host_thunk()));
+      // No q4-q31 save: no HIR value is live in a vector register across a
+      // call (see EmitGuestToHostThunkNoVec).
+      ldr(x9, BackendCtxPtr(offsetof(A64BackendContext,
+                                     guest_to_host_thunk_no_vec_address)));
       blr(x9);
     }
   } else if (function->behavior() == Function::Behavior::kExtern) {
@@ -948,7 +968,8 @@ void A64Emitter::CallExtern(const hir::Instr* instr, const Function* function) {
       mov(x0, reinterpret_cast<uint64_t>(extern_function->extern_handler()));
       ldr(x1, ptr(GetContextReg(), static_cast<int32_t>(offsetof(
                                        ppc::PPCContext, kernel_state))));
-      mov(x9, reinterpret_cast<uint64_t>(backend()->guest_to_host_thunk()));
+      ldr(x9, BackendCtxPtr(offsetof(A64BackendContext,
+                                     guest_to_host_thunk_no_vec_address)));
       blr(x9);
     }
   }
@@ -1001,7 +1022,8 @@ void A64Emitter::CallNativeSafe(void* fn) {
   // GuestToHostThunk: x0=target function, x1/x2=args (set by caller).
   // The thunk rearranges: saves x0 in x9, sets x0=context, calls x9.
   mov(x0, reinterpret_cast<uint64_t>(fn));
-  mov(x9, reinterpret_cast<uint64_t>(backend()->guest_to_host_thunk()));
+  ldr(x9,
+      BackendCtxPtr(offsetof(A64BackendContext, guest_to_host_thunk_address)));
   blr(x9);
   MergeFpcrModeAfterConditional(entry_mode);
 }
@@ -1113,7 +1135,8 @@ void A64Emitter::EmitPreemptCheck(uint32_t guest_address) {
           reinterpret_cast<uint64_t>(&xe::cpu::backend::preempt_yield_handler));
     e.ldr(e.x0, ptr(e.x0));
     e.cbz(e.x0, after);
-    e.mov(e.x9, reinterpret_cast<uint64_t>(e.backend()->guest_to_host_thunk()));
+    e.ldr(e.x9, e.BackendCtxPtr(
+                    offsetof(A64BackendContext, guest_to_host_thunk_address)));
     e.blr(e.x9);
     if (held_mode != FPCRMode::Unknown && held_mode != FPCRMode::Fpu) {
       e.ReloadFpcrMode(held_mode);
@@ -1129,7 +1152,11 @@ void A64Emitter::EmitPreemptCheck(uint32_t guest_address) {
                          offsetof(ppc::PPCContext, last_safepoint_pc))));
   }
   ldrb(w8, ptr(x20, flag_offset));
-  cbnz(w8, do_yield);
+  if (near_tail_branches_safe_) {
+    cbnz_near(w8, do_yield);
+  } else {
+    cbnz(w8, do_yield);
+  }
   L(after);
 }
 
