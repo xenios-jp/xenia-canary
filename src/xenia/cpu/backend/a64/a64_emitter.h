@@ -277,6 +277,26 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     DropPhysicalRemapBound();
   }
 
+  // A producer that emits nothing hands the next sequence the register it
+  // should have read and a 32-bit mask to fold into the address it computes
+  // anyway. Keyed on the register the producer would have written; cleared
+  // on read. The very next sequence must read it, or Emit fails the function.
+  void MarkFusedAddressMask(int dest_reg, int src_reg, uint32_t mask) {
+    fused_addr_mask_dest_reg_ = dest_reg;
+    fused_addr_mask_src_reg_ = src_reg;
+    fused_addr_mask_imm_ = mask;
+  }
+  bool ConsumeFusedAddressMask(int dest_reg, int* out_src_reg,
+                               uint32_t* out_mask) {
+    if (dest_reg < 0 || fused_addr_mask_dest_reg_ != dest_reg) {
+      return false;
+    }
+    *out_src_reg = fused_addr_mask_src_reg_;
+    *out_mask = fused_addr_mask_imm_;
+    fused_addr_mask_dest_reg_ = -1;
+    return true;
+  }
+
   // w7 holds 0xE0000000 for the physical remap from its first use until the
   // next label, block or host call. Nothing else in the backend uses w7.
   bool physical_remap_bound_valid() const {
@@ -399,6 +419,14 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     ++in.count;
   }
   bool physical_remap_bound_valid_ = false;
+  // Handoffs between adjacent sequences; see MarkFusedAddressMask.
+  void ResetSequenceHandoffs() { fused_addr_mask_dest_reg_ = -1; }
+  bool sequence_handoff_pending() const {
+    return fused_addr_mask_dest_reg_ >= 0;
+  }
+  int fused_addr_mask_dest_reg_ = -1;
+  int fused_addr_mask_src_reg_ = -1;
+  uint32_t fused_addr_mask_imm_ = 0;
   bool synchronize_stack_on_next_instruction_ = false;
 };
 

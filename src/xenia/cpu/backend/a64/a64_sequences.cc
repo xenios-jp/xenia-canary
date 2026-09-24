@@ -1611,7 +1611,54 @@ struct AND_I32 : Sequence<AND_I32, I<OPCODE_AND, I32Op, I32Op, I32Op>> {
   }
 };
 struct AND_I64 : Sequence<AND_I64, I<OPCODE_AND, I64Op, I64Op, I64Op>> {
+  // lvx/stvx reach the backend as `and ea, ~0xF` feeding straight into the
+  // vector access. With the physical remap the access truncates the address
+  // to 32 bits anyway, and one W-form AND does the mask and the truncation
+  // together. Clearing bits 3:0 cannot change the remap decision.
+  static bool TryFuseAddressMask(A64Emitter& e, const EmitArgType& i) {
+    // Without the remap the access indexes memory off the source register
+    // directly, and the data tracers recompute the address after the access.
+    if (!NeedsPhysicalRemap() || IsTracingData()) {
+      return false;
+    }
+    if (!i.src2.is_constant || i.src1.is_constant) {
+      return false;
+    }
+    const uint64_t mask = static_cast<uint64_t>(i.src2.constant());
+    if ((mask >> 32) != 0xFFFFFFFFull ||
+        !IsValidLogicalImm(static_cast<uint32_t>(mask), 32)) {
+      return false;
+    }
+    // The access must be the very next instruction, use the masked value as
+    // its address and be its only reader. Only the vector accesses reach
+    // their address solely through ComputeMemoryAddress.
+    const hir::Instr* next = i.instr->next;
+    if (!next) {
+      return false;
+    }
+    const bool is_load = next->GetOpcodeNum() == hir::OPCODE_LOAD;
+    const bool is_store = next->GetOpcodeNum() == hir::OPCODE_STORE;
+    if ((!is_load && !is_store) || next->src1.value != i.instr->dest) {
+      return false;
+    }
+    const hir::Value* accessed = is_load ? next->dest : next->src2.value;
+    if (!accessed || accessed->type != hir::VEC128_TYPE) {
+      return false;
+    }
+    const hir::Value* masked = i.instr->dest;
+    if (!masked->use_head || masked->use_head->next ||
+        masked->use_head->instr != next) {
+      return false;
+    }
+    e.MarkFusedAddressMask(i.dest.reg().getIdx(), i.src1.reg().getIdx(),
+                           static_cast<uint32_t>(mask));
+    return true;
+  }
+
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    if (TryFuseAddressMask(e, i)) {
+      return;
+    }
     if (i.src1.is_constant && i.src2.is_constant) {
       e.mov(i.dest,
             static_cast<uint64_t>(i.src1.constant() & i.src2.constant()));

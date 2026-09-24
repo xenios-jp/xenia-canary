@@ -331,7 +331,14 @@ inline XReg ComputeMemoryAddress(A64Emitter& e, const I64Op& guest) {
     // Guest addresses are always 32-bit. Clear any stale upper bits before
     // applying the host membase so guest pointers can't escape above 4 GB.
     // The remap writes w0 itself, which is the same truncation.
-    if (NeedsPhysicalRemap()) {
+    int mask_src_reg;
+    uint32_t mask;
+    if (e.ConsumeFusedAddressMask(src.getIdx(), &mask_src_reg, &mask)) {
+      // The producing AND emitted nothing; its mask and this truncation are
+      // the same W-form instruction.
+      e.and_(e.w0, WReg(mask_src_reg), static_cast<uint64_t>(mask));
+      ApplyPhysicalRemapW0(e, e.w0);
+    } else if (NeedsPhysicalRemap()) {
       ApplyPhysicalRemapW0(e, WReg(src.getIdx()));
     } else {
       e.mov(e.w0, WReg(src.getIdx()));

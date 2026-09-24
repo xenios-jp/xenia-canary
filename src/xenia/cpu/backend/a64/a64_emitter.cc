@@ -144,6 +144,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   // Count each block's incoming edges for the FPCR tracker, and note whether
   // the function touches VEC128 at all.
   function_has_vmx_ = false;
+  ResetSequenceHandoffs();
   expected_preds_.clear();
   incoming_fpcr_.clear();
   size_t hir_instr_count = 0;
@@ -303,6 +304,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
       }
       const hir::Instr* new_tail = instr;
       bool selected = false;
+      const bool handoff_pending = sequence_handoff_pending();
       try {
         selected = SelectSequence(this, instr, &new_tail);
         if (const hir::Label* label = instr->BranchLabel()) {
@@ -323,6 +325,16 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
         // sequences are implemented.
         XELOGE("A64: Unable to process HIR opcode {}",
                hir::GetOpcodeName(instr->GetOpcodeInfo()));
+        return false;
+      }
+      if (handoff_pending && sequence_handoff_pending()) {
+        // The previous sequence emitted nothing and left its work to this
+        // one, which did not do it: the code would compute a wrong result.
+        XELOGE(
+            "A64: HIR opcode {} did not take the handoff of the sequence "
+            "before it in guest function {:08X}",
+            hir::GetOpcodeName(instr->GetOpcodeInfo()),
+            current_guest_function_);
         return false;
       }
       instr = new_tail;
