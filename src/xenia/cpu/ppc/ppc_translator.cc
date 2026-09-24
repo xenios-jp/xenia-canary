@@ -18,6 +18,7 @@
 #include "xenia/base/cvar.h"
 #include "xenia/base/filesystem.h"
 #include "xenia/base/memory.h"
+#include "xenia/base/platform.h"
 #include "xenia/base/profiling.h"
 #include "xenia/base/reset_scope.h"
 #include "xenia/base/string.h"
@@ -67,6 +68,12 @@ PPCTranslator::PPCTranslator(PPCFrontend* frontend) : frontend_(frontend) {
 
   // Preemption safepoints for the guest scheduler. No-op when it is off.
   compiler_->AddPass(std::make_unique<passes::PreemptCheckInjectionPass>());
+
+#if XE_ARCH_ARM64
+  // Tags guest wait loops with DELAY_EXECUTION_INJECTED, which only the a64
+  // backend acts on.
+  compiler_->AddPass(std::make_unique<passes::SpinWaitInjectionPass>());
+#endif  // XE_ARCH_ARM64
 
   // Passes are executed in the order they are added. Multiple of the same
   // pass type may be used.

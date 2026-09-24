@@ -9,9 +9,12 @@
 
 #include "xenia/cpu/backend/a64/a64_sequences.h"
 
+#include <algorithm>
 #include "xenia/base/clock.h"
 #include "xenia/base/cvar.h"
+#include "xenia/base/logging.h"
 #include "xenia/base/memory.h"
+#include "xenia/base/threading.h"
 #include "xenia/cpu/backend/a64/a64_backend.h"
 #include "xenia/cpu/backend/a64/a64_emitter.h"
 #include "xenia/cpu/backend/a64/a64_op.h"
@@ -58,9 +61,76 @@ static bool IsPossibleMMIOInstruction(A64Emitter& e, const hir::Instr* i) {
 // ============================================================================
 // OPCODE_DELAY_EXECUTION
 // ============================================================================
+// A db16cyc loop gives up the core for kDb16cycSleepNs on its
+// kDb16cycYieldAfter-th consecutive delay; delays more than kDb16cycGapNs
+// apart restart the count.
+static constexpr uint32_t kDb16cycYieldAfter = 2;
+static constexpr uint64_t kDb16cycSleepNs = 60000;
+static constexpr uint64_t kDb16cycGapNs = 1000;
+// A tagged spin loop releases the core after kSpinWaitYieldAfter iterations
+// that averaged under kSpinWaitMaxIterNs each.
+static constexpr uint32_t kSpinWaitYieldAfter = 100000;
+static constexpr uint64_t kSpinWaitMaxIterNs = 1000;
+
+// The generated code reads CNTVCT_EL0, which counts at CNTFRQ_EL0.
+static uint64_t SpinWaitTimerFreq() {
+  static const uint64_t freq = Clock::host_tick_frequency_raw();
+  return freq;
+}
+
+static void SpinWaitRelease(void* raw_context) {
+  if (backend::spin_wait_release_handler) {
+    backend::spin_wait_release_handler(raw_context, kDb16cycSleepNs);
+    return;
+  }
+  xe::threading::NanoSleep(int64_t(kDb16cycSleepNs));
+}
+
+static constexpr uint32_t kSpinWaitRetripIters = 64;
+
+// State is keyed to the loop header: the iteration counter is shared by every
+// tagged site on the thread.
+static void InjectedSpinWaitTrip(void* raw_context, uint64_t site) {
+  auto* context = reinterpret_cast<ppc::PPCContext*>(raw_context);
+  auto* bctx = static_cast<A64Backend*>(context->processor->backend())
+                   ->BackendContextForGuestContext(raw_context);
+  uint64_t now = Clock::host_tick_count_raw();
+  const uint32_t site32 = uint32_t(site);
+  if (site32 != bctx->spin_wait_site) {
+    bctx->spin_wait_site = site32;
+    bctx->spin_wait_armed = 0;
+    bctx->spin_wait_spins = 0;
+    bctx->spin_wait_reset_tick = now;
+    return;
+  }
+  const uint64_t elapsed_ticks = now - bctx->spin_wait_reset_tick;
+  const uint64_t iters =
+      bctx->spin_wait_armed ? kSpinWaitRetripIters : kSpinWaitYieldAfter;
+  const uint64_t budget_ticks =
+      iters * kSpinWaitMaxIterNs * SpinWaitTimerFreq() / 1000000000ull;
+  if (elapsed_ticks <= budget_ticks) {
+    if (!bctx->spin_wait_armed) {
+      XELOGD("SpinWait: escalating guest loop {:08X}", site32);
+    }
+    SpinWaitRelease(raw_context);
+    bctx->spin_wait_armed = 1;
+    bctx->spin_wait_spins = kSpinWaitYieldAfter - kSpinWaitRetripIters;
+    now = Clock::host_tick_count_raw();
+    bctx->spin_wait_reset_tick = now;
+  } else {
+    bctx->spin_wait_armed = 0;
+    bctx->spin_wait_spins = 0;
+    bctx->spin_wait_reset_tick = now;
+  }
+}
+
 struct DELAY_EXECUTION
     : Sequence<DELAY_EXECUTION, I<OPCODE_DELAY_EXECUTION, VoidOp>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
+    if (i.instr->flags & hir::DELAY_EXECUTION_INJECTED) {
+      EmitInjectedSpinCheck(e, i);
+      return;
+    }
     // db16cyc throttles a guest spin loop. yield is the literal translation
     // but NOPs on Cortex-X/A7xx, so the sled cost nothing; isb is the usual
     // stand-in - a pipeline flush with no guest-observable effect. Coalesce
@@ -71,7 +141,56 @@ struct DELAY_EXECUTION
             kIsbSy) {
       return;
     }
+    const int32_t spins_offset =
+        static_cast<int32_t>(offsetof(A64BackendContext, db16cyc_spins));
+    const int32_t last_tick_offset =
+        static_cast<int32_t>(offsetof(A64BackendContext, db16cyc_last_tick));
+    const uint64_t gap_ticks = std::max<uint64_t>(
+        1, kDb16cycGapNs * SpinWaitTimerFreq() / 1000000000ull);
+    auto& not_consecutive = e.NewCachedLabel();
+    auto& do_release = e.NewCachedLabel();
+    auto& do_delay = e.NewCachedLabel();
+    // x16 = CNTVCT_EL0, x17 = ticks since the previous delay.
+    e.mrs(e.x16, 3, 3, 14, 0, 2);
+    e.ldr(e.x17, ptr(e.GetBackendCtxReg(), last_tick_offset));
+    e.str(e.x16, ptr(e.GetBackendCtxReg(), last_tick_offset));
+    e.sub(e.x17, e.x16, e.x17);
+    e.mov(e.x16, gap_ticks);
+    e.cmp(e.x17, e.x16);
+    e.b(HI, not_consecutive);
+    e.ldr(e.w16, ptr(e.GetBackendCtxReg(), spins_offset));
+    e.add(e.w16, e.w16, 1);
+    e.mov(e.w17, static_cast<uint64_t>(kDb16cycYieldAfter));
+    e.cmp(e.w16, e.w17);
+    e.b(HS, do_release);
+    e.str(e.w16, ptr(e.GetBackendCtxReg(), spins_offset));
+    e.b(do_delay);
+    e.L(not_consecutive);
+    e.mov(e.w16, 1);
+    e.str(e.w16, ptr(e.GetBackendCtxReg(), spins_offset));
+    e.b(do_delay);
+    e.L(do_release);
+    e.str(e.wzr, ptr(e.GetBackendCtxReg(), spins_offset));
+    e.CallNativeSafe(reinterpret_cast<void*>(SpinWaitRelease));
+    e.L(do_delay);
+    // Every path ends in the isb the coalescing test looks for.
     e.isb(Xbyak_aarch64::SY);
+  }
+
+  static void EmitInjectedSpinCheck(A64Emitter& e, const EmitArgType& i) {
+    const int32_t spins_offset =
+        static_cast<int32_t>(offsetof(A64BackendContext, spin_wait_spins));
+    auto& not_yet = e.NewCachedLabel();
+    e.ldr(e.w16, ptr(e.GetBackendCtxReg(), spins_offset));
+    e.add(e.w16, e.w16, 1);
+    e.str(e.w16, ptr(e.GetBackendCtxReg(), spins_offset));
+    e.mov(e.w17, static_cast<uint64_t>(kSpinWaitYieldAfter));
+    e.cmp(e.w16, e.w17);
+    e.b(LO, not_yet);
+    // x1 passes through the thunk as the helper's second argument.
+    e.mov(e.w1, static_cast<uint64_t>(uint32_t(i.instr->src1.offset)));
+    e.CallNativeSafe(reinterpret_cast<void*>(InjectedSpinWaitTrip));
+    e.L(not_yet);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_DELAY_EXECUTION, DELAY_EXECUTION);
