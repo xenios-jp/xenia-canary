@@ -636,6 +636,91 @@ static bool IsNonNanConstant(const hir::Value* v) {
   return v->type == hir::FLOAT64_TYPE && !std::isnan(v->constant.f64);
 }
 
+// The scalar sequences below that only move, test or compare values do not
+// switch the FPCR to the Fpu mode: a VMX mode differs from it in FZ and the
+// rounding mode, and those can change their result only for the operands
+// checked for here, which take a tail stub that does the work in the Fpu
+// mode. Switching instead would cost two FPCR writes, each of which waits for
+// every instruction before it, wherever such an op sits between VMX ops.
+
+// Whether a double can never be a denormal: every single and every integer is
+// a normal double or zero, and negating, taking the absolute value or
+// selecting keeps that. FCMP reads such an operand the same whatever FZ, the
+// only FPCR control a comparison uses.
+static bool IsNeverDenormalDouble(const hir::Value* v, int depth = 0) {
+  if (v->IsConstant()) {
+    const uint64_t bits = v->constant.u64;
+    return (bits & 0x7FF0000000000000ull) || !(bits & 0x000FFFFFFFFFFFFFull);
+  }
+  const hir::Instr* def = v->def;
+  if (!def || depth >= 4) {
+    return false;
+  }
+  switch (def->GetOpcodeNum()) {
+    case hir::OPCODE_UNPACK_SINGLE:
+    case hir::OPCODE_TO_SINGLE:
+      return true;
+    case hir::OPCODE_CONVERT:
+      return def->src1.value->type != hir::FLOAT64_TYPE;
+    case hir::OPCODE_ASSIGN:
+    case hir::OPCODE_NEG:
+    case hir::OPCODE_ABS:
+      return IsNeverDenormalDouble(def->src1.value, depth + 1);
+    case hir::OPCODE_SELECT:
+      return IsNeverDenormalDouble(def->src2.value, depth + 1) &&
+             IsNeverDenormalDouble(def->src3.value, depth + 1);
+    default:
+      return false;
+  }
+}
+
+static void ChangeFpcrModeForDoubleCompare(A64Emitter& e,
+                                           const hir::Instr* instr) {
+  if (!IsNeverDenormalDouble(instr->src1.value) ||
+      !IsNeverDenormalDouble(instr->src2.value)) {
+    e.ChangeFpcrMode(FPCRMode::Fpu);
+  }
+}
+
+// A tail stub that runs `op` with the Fpu mode in the FPCR, puts back the
+// FPCR it found, whatever that was, and returns to `done`. Clobbers x0 and
+// x17.
+template <typename Fn>
+static Xbyak_aarch64::Label& AddFpuModeTail(A64Emitter& e,
+                                            Xbyak_aarch64::Label& done, Fn op) {
+  return e.AddToTail([op, &done](A64Emitter& e, Xbyak_aarch64::Label&) {
+    e.mrs(e.x17, 3, 3, 4, 4, 0);  // mrs x17, FPCR
+    e.ldr(e.w0, e.BackendCtxPtr(offsetof(A64BackendContext, fpcr_fpu)));
+    e.msr(3, 3, 4, 4, 0, e.x0);  // msr FPCR, x0
+    op(e);
+    e.msr(3, 3, 4, 4, 0, e.x17);  // msr FPCR, x17
+    e.b(done);
+  });
+}
+
+// Branches to `target` if the single in `bits` is a denormal, and also for
+// the smallest normal, which costs nothing but a trip to the tail: of
+// (bits << 1) - 1, only those leave the top byte clear, a zero wrapping to
+// all ones. Clobbers w17.
+static void BranchIfDenormalSingle(A64Emitter& e, const WReg& bits,
+                                   Xbyak_aarch64::Label& target) {
+  e.lsl(e.w17, bits, 1);
+  e.sub(e.w17, e.w17, 1);
+  e.lsr(e.w17, e.w17, 24);
+  e.cbz(e.w17, target);
+}
+
+// Whether a double constant converts to single the same in every FPCR mode:
+// exactly, to a normal single or zero, or a NaN.
+static bool IsExactNormalSingle(double value) {
+  if (std::isnan(value) || value == 0.0) {
+    return true;
+  }
+  const float single = static_cast<float>(value);
+  return static_cast<double>(single) == value &&
+         std::fpclassify(single) == FP_NORMAL;
+}
+
 // Adding a NaN to itself quiets it without changing its payload or sign.
 template <typename Reg>
 static void EmitTakeNanOperand(A64Emitter& e, const Reg& dest,
@@ -3615,10 +3700,15 @@ EMITTER_OPCODE_TABLE(OPCODE_MIN, MIN_I8, MIN_I16, MIN_I32, MIN_I64, MIN_F32,
 // ============================================================================
 // OPCODE_CONVERT
 // ============================================================================
+// Truncating to an integer needs no FPCR mode: fcvtzs rounds toward zero
+// whatever the rounding mode, and a denormal gives 0 whether FZ flushes it
+// first or not.
 struct CONVERT_I32_F32
     : Sequence<CONVERT_I32_F32, I<OPCODE_CONVERT, I32Op, F32Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
+    if (i.instr->flags != ROUND_TO_ZERO) {
+      e.ChangeFpcrMode(FPCRMode::Fpu);
+    }
     if (i.src1.is_constant) {
       union {
         float f;
@@ -3640,7 +3730,9 @@ struct CONVERT_I32_F32
 struct CONVERT_I32_F64
     : Sequence<CONVERT_I32_F64, I<OPCODE_CONVERT, I32Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
+    if (i.instr->flags != ROUND_TO_ZERO) {
+      e.ChangeFpcrMode(FPCRMode::Fpu);
+    }
     if (i.src1.is_constant) {
       union {
         double d;
@@ -3663,7 +3755,9 @@ struct CONVERT_I32_F64
 struct CONVERT_I64_F64
     : Sequence<CONVERT_I64_F64, I<OPCODE_CONVERT, I64Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
+    if (i.instr->flags != ROUND_TO_ZERO) {
+      e.ChangeFpcrMode(FPCRMode::Fpu);
+    }
     if (i.src1.is_constant) {
       union {
         double d;
@@ -3921,9 +4015,9 @@ EMITTER_OPCODE_TABLE(OPCODE_SQRT, SQRT_F32, SQRT_F64, SQRT_V128);
 // ============================================================================
 // OPCODE_IS_NAN
 // ============================================================================
+// Any FPCR mode: FZ turns a denormal into a zero, never into a NaN or back.
 struct IS_NAN_F32 : Sequence<IS_NAN_F32, I<OPCODE_IS_NAN, I8Op, F32Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
     if (i.src1.is_constant) {
       union {
         float f;
@@ -3942,7 +4036,6 @@ struct IS_NAN_F32 : Sequence<IS_NAN_F32, I<OPCODE_IS_NAN, I8Op, F32Op>> {
 };
 struct IS_NAN_F64 : Sequence<IS_NAN_F64, I<OPCODE_IS_NAN, I8Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
     if (i.src1.is_constant) {
       union {
         double d;
@@ -4005,7 +4098,7 @@ struct COMPARE_EQ_F32
 struct COMPARE_EQ_F64
     : Sequence<COMPARE_EQ_F64, I<OPCODE_COMPARE_EQ, I8Op, F64Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
+    ChangeFpcrModeForDoubleCompare(e, i.instr);
     if (i.src1.is_constant) {
       union {
         double d;
@@ -4084,7 +4177,7 @@ struct COMPARE_NE_F32
 struct COMPARE_NE_F64
     : Sequence<COMPARE_NE_F64, I<OPCODE_COMPARE_NE, I8Op, F64Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
+    ChangeFpcrModeForDoubleCompare(e, i.instr);
     if (i.src1.is_constant) {
       union {
         double d;
@@ -4165,7 +4258,7 @@ struct COMPARE_NE_F64
   struct NAME##_F64                                                  \
       : Sequence<NAME##_F64, I<OPCODE_##NAME, I8Op, F64Op, F64Op>> { \
     static void Emit(A64Emitter& e, const EmitArgType& i) {          \
-      e.ChangeFpcrMode(FPCRMode::Fpu);                               \
+      ChangeFpcrModeForDoubleCompare(e, i.instr);                    \
       if (i.src1.is_constant) {                                      \
         union {                                                      \
           double d;                                                  \
@@ -4885,11 +4978,16 @@ EMITTER_OPCODE_TABLE(OPCODE_RECIP, RECIP_F32, RECIP_F64, RECIP_V128);
 // ============================================================================
 // OPCODE_TO_SINGLE
 // ============================================================================
+// Outside the Fpu mode (see IsNeverDenormalDouble) the result stands when it
+// is the source unchanged and a normal single or zero: neither rounding nor
+// FZ applies to such a value in any mode. Anything else, a NaN included,
+// takes the tail and converts in the Fpu mode.
 struct TOSINGLE : Sequence<TOSINGLE, I<OPCODE_TO_SINGLE, F64Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
-    DReg src = i.src1.is_constant ? e.d0 : DReg(i.src1.reg().getIdx());
     if (i.src1.is_constant) {
+      if (!IsExactNormalSingle(i.src1.constant())) {
+        e.ChangeFpcrMode(FPCRMode::Fpu);
+      }
       union {
         double d;
         uint64_t u;
@@ -4898,11 +4996,29 @@ struct TOSINGLE : Sequence<TOSINGLE, I<OPCODE_TO_SINGLE, F64Op, F64Op>> {
       e.mov(e.x0, c.u);
       e.fmov(e.d0, e.x0);
     }
+    DReg src = i.src1.is_constant ? e.d0 : DReg(i.src1.reg().getIdx());
     // Round double->single->double.
     // NaN sign is already correct from upstream arithmetic (EmitFmaWithPpcNan
     // etc.) or fneg.  fcvt with DN=0 preserves NaN sign, so no fixup needed.
     e.fcvt(e.s0, src);
-    e.fcvt(i.dest, e.s0);
+    if (i.src1.is_constant || e.fpcr_mode() == FPCRMode::Fpu) {
+      e.fcvt(i.dest, e.s0);
+      return;
+    }
+    const DReg dest = i.dest;
+    auto& done = e.NewCachedLabel();
+    auto& in_fpu = AddFpuModeTail(e, done, [src, dest](A64Emitter& e) {
+      e.fcvt(e.s0, src);
+      e.fcvt(dest, e.s0);
+    });
+    e.fcvt(e.d1, e.s0);
+    e.cmeq(e.d2, e.d1, src);
+    e.fmov(e.x17, e.d2);
+    e.cbz(e.x17, in_fpu);
+    e.fmov(e.w16, e.s0);
+    BranchIfDenormalSingle(e, e.w16, in_fpu);
+    e.fmov(dest, e.d1);
+    e.LKeepingRemapBound(done);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_TO_SINGLE, TOSINGLE);
@@ -4913,20 +5029,28 @@ EMITTER_OPCODE_TABLE(OPCODE_TO_SINGLE, TOSINGLE);
 // lfs widens without quieting, so the only value the host convert gets wrong
 // is a signaling NaN, and only in the quiet bit it forces on. The convert's
 // own result says whether the input was a NaN, and the fixup sits in the tail.
+// Widening is exact, so the rounding mode does not matter, and FZ flushes only
+// a denormal: outside the Fpu mode a denormal is widened in the tail instead.
 struct UNPACK_SINGLE
     : Sequence<UNPACK_SINGLE, I<OPCODE_UNPACK_SINGLE, F64Op, I32Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
     WReg src = i.src1.is_constant ? e.w0 : WReg(i.src1.reg().getIdx());
-    if (i.src1.is_constant) {
-      e.mov(e.w0, static_cast<uint64_t>(i.src1.constant()));
-    }
     const DReg dest = i.dest;
+    auto& done = e.NewCachedLabel();
+    if (i.src1.is_constant) {
+      e.ChangeFpcrMode(FPCRMode::Fpu);
+      e.mov(e.w0, static_cast<uint64_t>(i.src1.constant()));
+    } else if (e.fpcr_mode() != FPCRMode::Fpu) {
+      BranchIfDenormalSingle(
+          e, src, AddFpuModeTail(e, done, [src, dest](A64Emitter& e) {
+            e.fmov(SReg(dest.getIdx()), src);
+            e.fcvt(dest, SReg(dest.getIdx()));
+          }));
+    }
     e.fmov(SReg(dest.getIdx()), src);
     e.fcvt(dest, SReg(dest.getIdx()));
     e.fcmp(dest, dest);
 
-    auto& done = e.NewCachedLabel();
     auto& snan_fixup =
         e.AddToTail([src, dest, &done](A64Emitter& e, Xbyak_aarch64::Label&) {
           // A quiet NaN already has the bit the convert set.
@@ -4946,11 +5070,16 @@ EMITTER_OPCODE_TABLE(OPCODE_UNPACK_SINGLE, UNPACK_SINGLE);
 // OPCODE_PACK_SINGLE
 // ============================================================================
 // The stfs direction: the double is tested in place with fcmp, and only a NaN
-// takes the tail to carry its signaling bit across.
+// takes the tail to carry its signaling bit across. A NaN converts the same in
+// every FPCR mode; outside the Fpu mode any other value must also convert
+// exactly to a normal single or zero, as for TO_SINGLE, or be converted again
+// in the tail.
 struct PACK_SINGLE
     : Sequence<PACK_SINGLE, I<OPCODE_PACK_SINGLE, I32Op, F64Op>> {
   static void Emit(A64Emitter& e, const EmitArgType& i) {
-    e.ChangeFpcrMode(FPCRMode::Fpu);
+    if (i.src1.is_constant && !IsExactNormalSingle(i.src1.constant())) {
+      e.ChangeFpcrMode(FPCRMode::Fpu);
+    }
     DReg src = i.src1.is_constant ? e.d0 : DReg(i.src1.reg().getIdx());
     if (i.src1.is_constant) {
       union {
@@ -4978,6 +5107,17 @@ struct PACK_SINGLE
           e.b(done);
         });
     e.b(VS, snan_fixup);
+    if (!i.src1.is_constant && e.fpcr_mode() != FPCRMode::Fpu) {
+      auto& in_fpu = AddFpuModeTail(e, done, [src, dest](A64Emitter& e) {
+        e.fcvt(e.s1, src);
+        e.fmov(dest, e.s1);
+      });
+      e.fcvt(e.d0, e.s1);
+      e.cmeq(e.d0, e.d0, src);
+      e.fmov(e.x17, e.d0);
+      e.cbz(e.x17, in_fpu);
+      BranchIfDenormalSingle(e, dest, in_fpu);
+    }
     e.LKeepingRemapBound(done);
   }
 };
