@@ -9,6 +9,7 @@
 
 #include "xenia/cpu/testing/util.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 
@@ -57,21 +58,26 @@ uint64_t Reference(uint64_t a_bits, uint64_t b_bits, FpOp op) {
   return IsNaN(r_bits) ? 0x7FF8000000000000ull : r_bits;
 }
 
+const uint64_t kValues[] = {
+    0x7FF8000000000001ull,  // +QNaN
+    0xFFF8000000000001ull,  // -QNaN
+    0x7FF0000000000001ull,  // +SNaN
+    0xFFF0000000000001ull,  // -SNaN
+    0x7FF0000000000000ull,  // +inf
+    0xFFF0000000000000ull,  // -inf
+    0x0000000000000000ull,  // +0
+    0x8000000000000000ull,  // -0
+    0x3FF0000000000000ull,  // 1.0
+    0xC004000000000000ull,  // -2.5
+    0x0000000000000001ull,  // +denormal
+    0x7FEFFFFFFFFFFFFFull,  // max
+};
+
+uint64_t Quiet(uint64_t bits) {
+  return IsNaN(bits) ? bits | (1ull << 51) : bits;
+}
+
 void RunMatrix(FpOp op) {
-  static const uint64_t kValues[] = {
-      0x7FF8000000000001ull,  // +QNaN
-      0xFFF8000000000001ull,  // -QNaN
-      0x7FF0000000000001ull,  // +SNaN
-      0xFFF0000000000001ull,  // -SNaN
-      0x7FF0000000000000ull,  // +inf
-      0xFFF0000000000000ull,  // -inf
-      0x0000000000000000ull,  // +0
-      0x8000000000000000ull,  // -0
-      0x3FF0000000000000ull,  // 1.0
-      0xC004000000000000ull,  // -2.5
-      0x0000000000000001ull,  // +denormal
-      0x7FEFFFFFFFFFFFFFull,  // max
-  };
   TestFunction test([op](HIRBuilder& b) {
     Value* a = LoadFPR(b, 1);
     Value* c = LoadFPR(b, 2);
@@ -110,6 +116,69 @@ void RunMatrix(FpOp op) {
   }
 }
 
+// PowerPC fmadd/fmsub and their negations: the first NaN of frA, frB, frC
+// wins, quieted and not negated; a NaN the operation generates is the default
+// QNaN, also not negated.
+uint64_t FmaReference(uint64_t a_bits, uint64_t c_bits, uint64_t b_bits,
+                      bool sub, bool negate) {
+  for (uint64_t bits : {a_bits, b_bits, c_bits}) {
+    if (IsNaN(bits)) {
+      return Quiet(bits);
+    }
+  }
+  double a, b, c;
+  std::memcpy(&a, &a_bits, sizeof(a));
+  std::memcpy(&b, &b_bits, sizeof(b));
+  std::memcpy(&c, &c_bits, sizeof(c));
+  // Through a volatile: the compiler may fold the negation below into the fma
+  // as fnmadd or fnmsub, which negates the product and the addend separately
+  // and gives the other zero when they are zeros of opposite sign.
+  volatile double fused = std::fma(a, c, sub ? -b : b);
+  const double r = fused;
+  if (std::isnan(r)) {
+    return 0x7FF8000000000000ull;
+  }
+  uint64_t r_bits;
+  std::memcpy(&r_bits, &r, sizeof(r_bits));
+  return negate ? r_bits ^ (1ull << 63) : r_bits;
+}
+
+void RunFmaMatrix(bool sub, bool negate) {
+  TestFunction test([sub, negate](HIRBuilder& b) {
+    Value* a = LoadFPR(b, 1);
+    Value* c = LoadFPR(b, 2);
+    Value* addend = LoadFPR(b, 3);
+    Value* r =
+        sub ? b.MulSub(a, c, addend, negate) : b.MulAdd(a, c, addend, negate);
+    StoreFPR(b, 4, r);
+    b.Return();
+  });
+  // Each operand's NaNs carry a payload of their own, so the result shows
+  // which operand won.
+  auto tag = [](uint64_t bits, uint64_t operand) {
+    return IsNaN(bits) ? bits | (operand << 40) : bits;
+  };
+  for (uint64_t a0 : kValues) {
+    for (uint64_t c0 : kValues) {
+      for (uint64_t b0 : kValues) {
+        const uint64_t a = tag(a0, 1), c = tag(c0, 2), addend = tag(b0, 3);
+        INFO("a 0x" << std::hex << a << " c 0x" << c << " b 0x" << addend);
+        test.Run(
+            [&](PPCContext* ctx) {
+              std::memcpy(&ctx->f[1], &a, sizeof(a));
+              std::memcpy(&ctx->f[2], &c, sizeof(c));
+              std::memcpy(&ctx->f[3], &addend, sizeof(addend));
+            },
+            [&](PPCContext* ctx) {
+              uint64_t result;
+              std::memcpy(&result, &ctx->f[4], sizeof(result));
+              REQUIRE(result == FmaReference(a, c, addend, sub, negate));
+            });
+      }
+    }
+  }
+}
+
 }  // namespace
 
 // The PPC golden corpus has no NaN operands for scalar arithmetic.
@@ -117,3 +186,7 @@ TEST_CASE("SCALAR_FP_NAN_ADD", "[instr]") { RunMatrix(FpOp::kAdd); }
 TEST_CASE("SCALAR_FP_NAN_SUB", "[instr]") { RunMatrix(FpOp::kSub); }
 TEST_CASE("SCALAR_FP_NAN_MUL", "[instr]") { RunMatrix(FpOp::kMul); }
 TEST_CASE("SCALAR_FP_NAN_DIV", "[instr]") { RunMatrix(FpOp::kDiv); }
+TEST_CASE("SCALAR_FP_NAN_MUL_ADD", "[instr]") { RunFmaMatrix(false, false); }
+TEST_CASE("SCALAR_FP_NAN_MUL_SUB", "[instr]") { RunFmaMatrix(true, false); }
+TEST_CASE("SCALAR_FP_NAN_NMUL_ADD", "[instr]") { RunFmaMatrix(false, true); }
+TEST_CASE("SCALAR_FP_NAN_NMUL_SUB", "[instr]") { RunFmaMatrix(true, true); }
