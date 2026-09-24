@@ -25,6 +25,7 @@ namespace xe {
 namespace cpu {
 
 class Processor;
+struct InfoCacheFlags;
 
 class Module {
  public:
@@ -41,6 +42,11 @@ class Module {
   // Where the translator reads the instruction at a guest code address from.
   virtual const uint8_t* TranslateCode(uint32_t address) const {
     return memory_->TranslateVirtual<const uint8_t*>(address);
+  }
+
+  // What is known about the instruction at a guest code address, or null.
+  virtual InfoCacheFlags* GetInstructionAddressFlags(uint32_t address) {
+    return nullptr;
   }
 
   Symbol* LookupSymbol(uint32_t address, bool wait = true);
