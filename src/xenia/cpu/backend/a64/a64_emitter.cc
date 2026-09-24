@@ -146,7 +146,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   function_has_vmx_ = false;
   ResetSequenceHandoffs();
   expected_preds_.clear();
-  incoming_fpcr_.clear();
+  incoming_state_.clear();
   size_t hir_instr_count = 0;
   for (auto* b = builder->first_block(); b; b = b->next) {
     // Branches can sit mid-block, so every instruction is scanned.
@@ -181,7 +181,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   }
   // The function entry is an edge too, and every function is entered in Fpu.
   ++expected_preds_[builder->first_block()];
-  RecordIncomingFpcr(builder->first_block(), FPCRMode::Fpu);
+  RecordIncomingState(builder->first_block(), FPCRMode::Fpu, false);
   // 256 bytes per HIR instruction bounds the body, the tail and the literal
   // pool islands. Should that bound ever be wrong, xbyak_aarch64 rejects the
   // out-of-range branch when the label is bound (ERR_LABEL_IS_TOO_FAR), and
@@ -265,26 +265,32 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
   auto block = builder->first_block();
   synchronize_stack_on_next_instruction_ = false;
   while (block) {
-    // Start in the meet of the incoming modes once every incoming edge has
+    // Start in the meet of the incoming states once every incoming edge has
     // been emitted. A loop header's back edge has not been, so it starts
-    // Unknown.
+    // with the FPCR mode Unknown and the remap bound not loaded.
+    FPCRMode incoming_fpcr = FPCRMode::Unknown;
+    bool incoming_remap_bound = false;
     {
-      FPCRMode incoming = FPCRMode::Unknown;
       auto exp_it = expected_preds_.find(block);
-      auto in_it = incoming_fpcr_.find(block);
-      if (exp_it != expected_preds_.end() && in_it != incoming_fpcr_.end() &&
+      auto in_it = incoming_state_.find(block);
+      if (exp_it != expected_preds_.end() && in_it != incoming_state_.end() &&
           in_it->second.count == exp_it->second) {
-        incoming = in_it->second.meet;
+        incoming_fpcr = in_it->second.fpcr_meet;
+        incoming_remap_bound = in_it->second.remap_bound_valid;
       }
-      fpcr_mode_ = incoming;
     }
-    DropPhysicalRemapBound();
+    fpcr_mode_ = incoming_fpcr;
 
     // Bind all labels targeting this block.
     auto label = block->label_head;
     while (label) {
       L(GetLabel(label->id));
       label = label->next;
+    }
+    if (incoming_remap_bound) {
+      set_physical_remap_bound_valid();
+    } else {
+      DropPhysicalRemapBound();
     }
 
     // Process each instruction in the block.
@@ -308,7 +314,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
       try {
         selected = SelectSequence(this, instr, &new_tail);
         if (const hir::Label* label = instr->BranchLabel()) {
-          RecordIncomingFpcr(label->block, fpcr_mode_);
+          RecordIncomingState(label->block);
         }
       } catch (const Xbyak_aarch64::Error& e) {
         // Uncaught this aborts the process with no context, so name the opcode
@@ -347,7 +353,7 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
 
     auto* last = block->instr_tail;
     if (block->next && !(last && last->opcode == &hir::OPCODE_BRANCH_info)) {
-      RecordIncomingFpcr(block->next, fpcr_mode_);
+      RecordIncomingState(block->next);
     }
     block = block->next;
   }
@@ -572,7 +578,7 @@ void A64Emitter::b(const Xbyak_aarch64::Cond cond,
   Xbyak_aarch64::Label skip;
   CodeGenerator::b(static_cast<Xbyak_aarch64::Cond>(cond ^ 1), skip);
   CodeGenerator::b(label);
-  L(skip);
+  LKeepingRemapBound(skip);
 }
 
 void A64Emitter::cbz(const Xbyak_aarch64::WReg& rt,
@@ -585,7 +591,7 @@ void A64Emitter::cbz(const Xbyak_aarch64::WReg& rt,
   Xbyak_aarch64::Label skip;
   CodeGenerator::cbnz(rt, skip);
   CodeGenerator::b(label);
-  L(skip);
+  LKeepingRemapBound(skip);
 }
 
 void A64Emitter::cbz(const Xbyak_aarch64::XReg& rt,
@@ -598,7 +604,7 @@ void A64Emitter::cbz(const Xbyak_aarch64::XReg& rt,
   Xbyak_aarch64::Label skip;
   CodeGenerator::cbnz(rt, skip);
   CodeGenerator::b(label);
-  L(skip);
+  LKeepingRemapBound(skip);
 }
 
 void A64Emitter::cbnz(const Xbyak_aarch64::WReg& rt,
@@ -611,7 +617,7 @@ void A64Emitter::cbnz(const Xbyak_aarch64::WReg& rt,
   Xbyak_aarch64::Label skip;
   CodeGenerator::cbz(rt, skip);
   CodeGenerator::b(label);
-  L(skip);
+  LKeepingRemapBound(skip);
 }
 
 void A64Emitter::cbnz(const Xbyak_aarch64::XReg& rt,
@@ -624,7 +630,7 @@ void A64Emitter::cbnz(const Xbyak_aarch64::XReg& rt,
   Xbyak_aarch64::Label skip;
   CodeGenerator::cbz(rt, skip);
   CodeGenerator::b(label);
-  L(skip);
+  LKeepingRemapBound(skip);
 }
 
 void A64Emitter::tbz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
@@ -637,7 +643,7 @@ void A64Emitter::tbz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
   Xbyak_aarch64::Label skip;
   CodeGenerator::tbnz(rt, imm, skip);
   CodeGenerator::b(label);
-  L(skip);
+  LKeepingRemapBound(skip);
 }
 
 void A64Emitter::tbz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
@@ -650,7 +656,7 @@ void A64Emitter::tbz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
   Xbyak_aarch64::Label skip;
   CodeGenerator::tbnz(rt, imm, skip);
   CodeGenerator::b(label);
-  L(skip);
+  LKeepingRemapBound(skip);
 }
 
 void A64Emitter::tbnz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
@@ -663,7 +669,7 @@ void A64Emitter::tbnz(const Xbyak_aarch64::WReg& rt, uint32_t imm,
   Xbyak_aarch64::Label skip;
   CodeGenerator::tbz(rt, imm, skip);
   CodeGenerator::b(label);
-  L(skip);
+  LKeepingRemapBound(skip);
 }
 
 void A64Emitter::tbnz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
@@ -676,7 +682,7 @@ void A64Emitter::tbnz(const Xbyak_aarch64::XReg& rt, uint32_t imm,
   Xbyak_aarch64::Label skip;
   CodeGenerator::tbz(rt, imm, skip);
   CodeGenerator::b(label);
-  L(skip);
+  LKeepingRemapBound(skip);
 }
 
 void A64Emitter::UnimplementedInstr(const hir::Instr* i) {

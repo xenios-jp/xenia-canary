@@ -277,6 +277,14 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     // A label may be reached from code that never loaded the bound.
     DropPhysicalRemapBound();
   }
+  // Binds a label that is reached only by branches emitted in the state the
+  // emitter is in now, through code that leaves w7 alone: the skip after a
+  // long branch, or the return from a tail stub that works in scratch
+  // registers. The physical remap bound stays valid across it.
+  void LKeepingRemapBound(Xbyak_aarch64::Label& label) {
+    CodeGenerator::L(label);
+    label_bind_offsets_.emplace(label.getId(), getSize());
+  }
 
   // A producer that emits nothing hands the next sequence the register it
   // should have read and a 32-bit mask to fold into the address it computes
@@ -344,7 +352,8 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   }
 
   // w7 holds 0xE0000000 for the physical remap from its first use until the
-  // next label, block or host call. Nothing else in the backend uses w7.
+  // next host call or label, across a block boundary only when every edge
+  // into the block carries it. Nothing else in the backend uses w7.
   bool physical_remap_bound_valid() const {
     return physical_remap_bound_valid_;
   }
@@ -449,21 +458,33 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
   bool function_has_vmx_ = false;
   // FPCR tracking across blocks: lattice {Unknown, Fpu, Vmx, VmxDaz}, where
   // meet(a, b) = a if a == b else Unknown. A block starts in the meet of its
-  // incoming edges once all of them have been emitted, else Unknown.
-  struct IncomingFpcr {
-    FPCRMode meet = FPCRMode::Unknown;
+  // incoming edges once all of them have been emitted, else Unknown. The
+  // remap bound in w7 is tracked the same way: a block starts with it loaded
+  // only when every incoming edge left it loaded.
+  struct IncomingState {
+    FPCRMode fpcr_meet = FPCRMode::Unknown;
+    bool remap_bound_valid = false;
     uint32_t count = 0;
   };
   std::unordered_map<const hir::Block*, uint32_t> expected_preds_;
-  std::unordered_map<const hir::Block*, IncomingFpcr> incoming_fpcr_;
-  void RecordIncomingFpcr(const hir::Block* target, FPCRMode mode) {
-    auto& in = incoming_fpcr_[target];
+  std::unordered_map<const hir::Block*, IncomingState> incoming_state_;
+  void RecordIncomingState(const hir::Block* target, FPCRMode mode,
+                           bool remap_bound_valid) {
+    auto& in = incoming_state_[target];
     if (in.count == 0) {
-      in.meet = mode;
-    } else if (in.meet != mode) {
-      in.meet = FPCRMode::Unknown;
+      in.fpcr_meet = mode;
+      in.remap_bound_valid = remap_bound_valid;
+    } else {
+      if (in.fpcr_meet != mode) {
+        in.fpcr_meet = FPCRMode::Unknown;
+      }
+      in.remap_bound_valid = in.remap_bound_valid && remap_bound_valid;
     }
     ++in.count;
+  }
+  // An edge leaving from where the emitter is now.
+  void RecordIncomingState(const hir::Block* target) {
+    RecordIncomingState(target, fpcr_mode_, physical_remap_bound_valid_);
   }
   bool physical_remap_bound_valid_ = false;
   // Handoffs between adjacent sequences; see MarkFusedAddressMask and

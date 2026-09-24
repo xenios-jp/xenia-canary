@@ -694,7 +694,7 @@ static void EmitFpBinOpWithPpcNan(A64Emitter& e, const hir::Instr* instr,
       });
   e.fcmp(dest, dest);
   e.b(VS, nan_result);
-  e.L(done);
+  e.LKeepingRemapBound(done);
 }
 
 // PPC FMA NaN selection (PowerISA 4.6.7.2):
@@ -749,7 +749,7 @@ static void EmitFmaWithPpcNan(A64Emitter& e, std::type_identity_t<Reg> dest,
   if (negate) {
     e.fneg(dest, dest);
   }
-  e.L(done);
+  e.LKeepingRemapBound(done);
 }
 
 struct ADD_F32 : Sequence<ADD_F32, I<OPCODE_ADD, F32Op, F32Op, F32Op>> {
@@ -3495,7 +3495,7 @@ struct DENORMAL_QUIRK
     e.b(LO, slow_path);
     // movz form: mov(dest, WReg(31)) would assemble as the SP-alias ADD.
     e.mov(i.dest, uint64_t(0));
-    e.L(done);
+    e.LKeepingRemapBound(done);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_DENORMAL_QUIRK, DENORMAL_QUIRK);
@@ -4937,7 +4937,7 @@ struct UNPACK_SINGLE
           e.b(done);
         });
     e.b(VS, snan_fixup);
-    e.L(done);
+    e.LKeepingRemapBound(done);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_UNPACK_SINGLE, UNPACK_SINGLE);
@@ -4978,7 +4978,7 @@ struct PACK_SINGLE
           e.b(done);
         });
     e.b(VS, snan_fixup);
-    e.L(done);
+    e.LKeepingRemapBound(done);
   }
 };
 EMITTER_OPCODE_TABLE(OPCODE_PACK_SINGLE, PACK_SINGLE);
