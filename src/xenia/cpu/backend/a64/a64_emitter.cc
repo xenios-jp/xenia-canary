@@ -327,7 +327,8 @@ bool A64Emitter::Emit(hir::HIRBuilder* builder, EmitFunctionInfo& func_info) {
                hir::GetOpcodeName(instr->GetOpcodeInfo()));
         return false;
       }
-      if (handoff_pending && sequence_handoff_pending()) {
+      if (handoff_pending && sequence_handoff_pending() &&
+          !PassesHandoffs(instr)) {
         // The previous sequence emitted nothing and left its work to this
         // one, which did not do it: the code would compute a wrong result.
         XELOGE(

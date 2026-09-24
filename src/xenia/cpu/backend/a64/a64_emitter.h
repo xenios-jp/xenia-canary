@@ -297,6 +297,39 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     return true;
   }
 
+  // A compare whose only reader is the branch right after it makes no
+  // boolean: the branch reads the flags the compare set. Keyed on the
+  // register the cset would have written; cleared on read. Only instructions
+  // that PassesHandoffs may sit between the two, and the branch must take it,
+  // or Emit fails the function.
+  void MarkFusedCompareBranch(int dest_reg, Xbyak_aarch64::Cond cond) {
+    fused_cmp_branch_reg_ = dest_reg;
+    fused_cmp_branch_cond_ = cond;
+  }
+  bool ConsumeFusedCompareBranch(int dest_reg, Xbyak_aarch64::Cond* out_cond) {
+    if (dest_reg < 0 || fused_cmp_branch_reg_ != dest_reg) {
+      return false;
+    }
+    *out_cond = fused_cmp_branch_cond_;
+    fused_cmp_branch_reg_ = -1;
+    return true;
+  }
+
+  // SOURCE_OFFSET, CONTEXT_BARRIER and NOP emit no code that touches NZCV
+  // or a register a required handoff names (SOURCE_OFFSET's coverage
+  // counter uses add, not adds, and only x0/x1). COMMENT does not pass: it
+  // calls TraceString when instruction tracing is on.
+  static bool PassesHandoffs(const hir::Instr* instr) {
+    switch (instr->GetOpcodeNum()) {
+      case hir::OPCODE_SOURCE_OFFSET:
+      case hir::OPCODE_CONTEXT_BARRIER:
+      case hir::OPCODE_NOP:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   // A guest call writes its return address twice from the same immediate:
   // into the host stack slot and into the guest link register. The first
   // leaves it in x0, and `reader`, the HIR instruction right after it, may
@@ -431,17 +464,21 @@ class A64Emitter : public Xbyak_aarch64::CodeGenerator {
     ++in.count;
   }
   bool physical_remap_bound_valid_ = false;
-  // Handoffs between adjacent sequences; see MarkFusedAddressMask.
+  // Handoffs between adjacent sequences; see MarkFusedAddressMask and
+  // MarkFusedCompareBranch.
   void ResetSequenceHandoffs() {
     fused_addr_mask_dest_reg_ = -1;
+    fused_cmp_branch_reg_ = -1;
     x0_constant_reader_ = nullptr;
   }
   bool sequence_handoff_pending() const {
-    return fused_addr_mask_dest_reg_ >= 0;
+    return fused_addr_mask_dest_reg_ >= 0 || fused_cmp_branch_reg_ >= 0;
   }
   int fused_addr_mask_dest_reg_ = -1;
   int fused_addr_mask_src_reg_ = -1;
   uint32_t fused_addr_mask_imm_ = 0;
+  int fused_cmp_branch_reg_ = -1;
+  Xbyak_aarch64::Cond fused_cmp_branch_cond_ = Xbyak_aarch64::EQ;
   const hir::Instr* x0_constant_reader_ = nullptr;
   uint64_t x0_constant_ = 0;
   bool synchronize_stack_on_next_instruction_ = false;
