@@ -15,9 +15,9 @@
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
+#include "xenia/net/sha1.h"
 
 #include "third_party/crypto/TinySHA1.hpp"
-#include "third_party/crypto/des/des.cpp"
 #include "third_party/crypto/des/des.h"
 #include "third_party/crypto/des/des3.h"
 #include "third_party/crypto/des/descbc.h"
@@ -1066,6 +1066,14 @@ dword_result_t XeKeysHmacSha_entry(dword_t key_num, lpvoid_t inp_1,
   return X_STATUS_UNSUCCESSFUL;
 }
 DECLARE_XBOXKRNL_EXPORT1(XeKeysHmacSha, kNone, kImplemented);
+
+// Native services share the existing platform-key implementation. The key
+// stays inside this service and is never copied into the LAN subsystem.
+bool NativePlatformHmac(std::span<const uint8_t> input,
+                        net::crypto::Sha1Digest& digest) {
+  digest = net::crypto::HmacSha1(key19, {input});
+  return true;
+}
 
 void XeCryptRotSumSha_entry(lpvoid_t inp_1, dword_t inp_1_size, lpvoid_t inp_2,
                             dword_t inp_2_size, lpvoid_t out,

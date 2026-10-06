@@ -10,11 +10,14 @@
 #ifndef XENIA_KERNEL_XAM_XAM_MODULE_H_
 #define XENIA_KERNEL_XAM_XAM_MODULE_H_
 
+#include <memory>
+#include <mutex>
 #include <string>
 
 #include "xenia/cpu/export_resolver.h"
 #include "xenia/kernel/kernel_module.h"
 #include "xenia/kernel/kernel_state.h"
+#include "xenia/net/lan.h"
 
 namespace xe {
 namespace kernel {
@@ -24,6 +27,7 @@ class XamModule : public KernelModule {
  public:
   XamModule(Emulator* emulator, KernelState* kernel_state);
   virtual ~XamModule();
+  std::shared_ptr<net::Lan> local_lan();
 
   static void RegisterExportTable(xe::cpu::ExportResolver* export_resolver);
 
@@ -45,6 +49,8 @@ class XamModule : public KernelModule {
  private:
   uint32_t callback_ = 0;
   LoaderData loader_data_;
+  std::mutex lan_mutex_;
+  std::shared_ptr<net::Lan> lan_;
 };
 
 }  // namespace xam

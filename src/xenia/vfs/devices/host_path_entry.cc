@@ -29,6 +29,13 @@ HostPathEntry::HostPathEntry(Device* device, Entry* parent,
 
 HostPathEntry::~HostPathEntry() = default;
 
+void HostPathEntry::ReleaseFile() {
+  auto global_lock = global_critical_region_.Acquire();
+  if (open_files_.fetch_sub(1) == 1 && delete_on_close() && parent()) {
+    Delete();
+  }
+}
+
 HostPathEntry* HostPathEntry::Create(Device* device, Entry* parent,
                                      const std::filesystem::path& full_path,
                                      xe::filesystem::FileInfo file_info) {

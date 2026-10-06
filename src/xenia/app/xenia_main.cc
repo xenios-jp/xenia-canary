@@ -28,6 +28,11 @@
 #include "xenia/debug/ui/debug_window.h"
 #include "xenia/emulator.h"
 #include "xenia/kernel/xam/xam_module.h"
+#if XE_PLATFORM_MAC
+#include "xenia/base/system.h"
+#include "xenia/kernel/xam/xnet_service.h"
+#include "xenia/net/mac/packet_access.h"
+#endif
 #include "xenia/ui/file_picker.h"
 #include "xenia/ui/redist_installer_wx.h"
 #include "xenia/ui/window.h"
@@ -553,6 +558,16 @@ bool EmulatorApp::OnInitialize() {
   if (!cvars::target.empty()) {
     config::LoadGameConfigForFile(cvars::target);
   }
+
+#if XE_PLATFORM_MAC
+  if (kernel::xam::NativeLanEnabled()) {
+    std::string error;
+    if (!net::EnsurePacketAccess(error) && !error.empty()) {
+      XELOGE("Console-networking setup: {}", error);
+      xe::ShowSimpleMessageBox(xe::SimpleMessageBoxType::Warning, error);
+    }
+  }
+#endif
 
 #if XE_ARCH_AMD64 == 1
   amd64::InitFeatureFlags();

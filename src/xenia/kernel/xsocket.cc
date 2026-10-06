@@ -20,6 +20,7 @@
 #include "xenia/kernel/guest_scheduler.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xam/xam_module.h"
+#include "xenia/kernel/xam/xnet_service.h"
 #include "xenia/kernel/xevent.h"
 #include "xenia/kernel/xthread.h"
 
@@ -178,7 +179,10 @@ XSocket::XSocket(KernelState* kernel_state, asio::ip::tcp::socket socket)
 
 XSocket::~XSocket() { Close(); }
 
-uint64_t XSocket::native_handle() {
+uint64_t XSocket::native_handle(bool write) {
+  if (lan_socket_ && !write) {
+    return lan_socket_->ReadHandle();
+  }
   if (tcp_socket_ && tcp_socket_->is_open()) {
     return static_cast<uint64_t>(tcp_socket_->native_handle());
   }
@@ -232,6 +236,18 @@ X_STATUS XSocket::Initialize(AddressFamily af, Type type, Protocol proto) {
 }
 
 X_STATUS XSocket::Close() {
+#if !XE_PLATFORM_WIN32
+  if (lan_readiness_) {
+    asio::error_code ec;
+    lan_readiness_->close(ec);
+    lan_readiness_.reset();
+  }
+#endif
+  if (lan_socket_) {
+    lan_socket_->Close();
+    lan_socket_.reset();
+  }
+  lan_.reset();
   asio::error_code ec;
 
   if (tcp_socket_) {
@@ -282,7 +298,7 @@ X_STATUS XSocket::GetOption(uint32_t level, uint32_t optname, void* optval_ptr,
   asio::error_code ec;
   socklen_t native_optlen = static_cast<socklen_t>(*optlen);
 
-  int native_handle_val = static_cast<int>(native_handle());
+  int native_handle_val = static_cast<int>(native_handle(true));
   if (native_handle_val == -1) {
     return X_STATUS_INVALID_HANDLE;
   }
@@ -325,7 +341,7 @@ X_STATUS XSocket::SetOption(uint32_t level, uint32_t optname, void* optval_ptr,
     native_optname = supported_tcp_options.at(optname);
   }
 
-  int native_handle_val = static_cast<int>(native_handle());
+  int native_handle_val = static_cast<int>(native_handle(true));
   if (native_handle_val == -1) {
     return X_STATUS_INVALID_HANDLE;
   }
@@ -389,6 +405,12 @@ X_STATUS XSocket::IOControl(uint32_t cmd, uint8_t* arg_ptr) {
 
   // FIONREAD - get bytes available
   if (cmd == 0x4004667F) {
+    if (lan_socket_) {
+      *reinterpret_cast<uint32_t*>(arg_ptr) =
+          static_cast<uint32_t>(lan_socket_->PendingBytes());
+      return X_STATUS_SUCCESS;
+    }
+
     size_t available = 0;
     if (tcp_socket_) {
       available = tcp_socket_->available(ec);
@@ -519,6 +541,38 @@ X_STATUS XSocket::Connect(N_XSOCKADDR* name, int name_len) {
 X_STATUS XSocket::Bind(N_XSOCKADDR_IN* name, int name_len) {
   if (!tcp_socket_ && !udp_socket_ && !acceptor_) {
     return X_STATUS_INVALID_HANDLE;
+  }
+
+  if (udp_socket_ && xam::NativeLanEnabled()) {
+    lan_ = xam::LocalLan(kernel_state_);
+    if (!lan_) {
+      last_error_ = 10050;
+      return X_STATUS_UNSUCCESSFUL;
+    }
+    if (bound_ ||
+        (name->sin_addr && name->sin_addr != lan_->identity().address)) {
+      last_error_ = 10022;
+      return X_STATUS_UNSUCCESSFUL;
+    }
+    const uint16_t port = name->sin_port;
+    lan_socket_ = lan_->native()->Bind(port, proto_ == X_IPPROTO_VDP);
+    if (!lan_socket_) {
+      last_error_ = 10048;
+      return X_STATUS_UNSUCCESSFUL;
+    }
+#if !XE_PLATFORM_WIN32
+    const int readiness = dup(lan_socket_->ReadHandle());
+    if (readiness < 0) {
+      lan_socket_->Close();
+      lan_socket_.reset();
+      last_error_ = 10055;
+      return X_STATUS_UNSUCCESSFUL;
+    }
+    lan_readiness_.emplace(GetIoContext(), readiness);
+#endif
+    bound_port_ = lan_socket_->port();
+    bound_ = true;
+    return X_STATUS_SUCCESS;
   }
 
   // On Linux and Windows (when running under Wine), ports < 1024 require root
@@ -708,6 +762,34 @@ int XSocket::Recv(uint8_t* buf, uint32_t buf_len, uint32_t flags) {
 
 int XSocket::RecvFrom(uint8_t* buf, uint32_t buf_len, uint32_t flags,
                       N_XSOCKADDR_IN* from, uint32_t* from_len) {
+  if (lan_socket_) {
+    asio::error_code ec;
+    net::Endpoint source;
+    int result = -1;
+    RunCooperatively(ec, RetryMode::kReceive, [&] {
+      result = lan_socket_->ReceiveGuest(
+          {buf, buf_len}, flags, source,
+          guest_non_blocking_ ||
+              GuestScheduler::CurrentThreadOffloadsBlockingCalls());
+      ec = result < 0
+               ? asio::error_code(errno, asio::error::get_system_category())
+               : asio::error_code{};
+    });
+    if (ec) {
+      last_error_ = AsioErrorToWSAError(ec);
+      return -1;
+    }
+    if (from) {
+      from->sin_family = AF_INET;
+      from->sin_addr = source.address;
+      from->sin_port = source.port;
+      std::memset(from->x_sin_zero, 0, sizeof(from->x_sin_zero));
+    }
+    if (from_len) {
+      *from_len = sizeof(N_XSOCKADDR_IN);
+    }
+    return result;
+  }
   if (!udp_socket_ && !tcp_socket_) {
     return -1;
   }
@@ -774,6 +856,19 @@ int XSocket::Send(const uint8_t* buf, uint32_t buf_len, uint32_t flags) {
 
 int XSocket::SendTo(uint8_t* buf, uint32_t buf_len, uint32_t flags,
                     N_XSOCKADDR_IN* to, uint32_t to_len) {
+  if (lan_socket_) {
+    if (!to || flags) {
+      last_error_ = 10022;
+      return -1;
+    }
+    const int result =
+        lan_socket_->Send({to->sin_addr, to->sin_port}, {buf, buf_len});
+    if (result < 0) {
+      last_error_ = AsioErrorToWSAError(
+          asio::error_code(errno, asio::error::get_system_category()));
+    }
+    return result;
+  }
   if (!udp_socket_ && !tcp_socket_) {
     return -1;
   }
@@ -846,6 +941,11 @@ int XSocket::WSAEventSelect(object_ref<XEvent> event, uint32_t flags) {
   // Cancel pending waits from any prior selection.
   if (selected_event_) {
     asio::error_code cancel_ec;
+#if !XE_PLATFORM_WIN32
+    if (lan_readiness_) {
+      lan_readiness_->cancel(cancel_ec);
+    }
+#endif
     if (acceptor_) {
       acceptor_->cancel(cancel_ec);
     } else if (tcp_socket_) {
@@ -875,7 +975,13 @@ int XSocket::WSAEventSelect(object_ref<XEvent> event, uint32_t flags) {
   };
 
   if (want_read) {
-    if (acceptor_) {
+#if !XE_PLATFORM_WIN32
+    if (lan_readiness_) {
+      lan_readiness_->async_wait(asio::posix::stream_descriptor::wait_read,
+                                 handler);
+    } else
+#endif
+        if (acceptor_) {
       acceptor_->async_wait(asio::socket_base::wait_read, handler);
     } else if (tcp_socket_) {
       tcp_socket_->async_wait(asio::socket_base::wait_read, handler);
@@ -913,6 +1019,17 @@ bool XSocket::QueuePacket(uint32_t src_ip, uint16_t src_port,
 }
 
 X_STATUS XSocket::QueryName(bool peer, N_XSOCKADDR_IN* name) {
+  if (lan_socket_) {
+    if (peer) {
+      last_error_ = 10057;
+      return X_STATUS_UNSUCCESSFUL;
+    }
+    name->sin_family = AF_INET;
+    name->sin_addr = lan_->identity().address;
+    name->sin_port = bound_port_;
+    std::memset(name->x_sin_zero, 0, sizeof(name->x_sin_zero));
+    return X_STATUS_SUCCESS;
+  }
   auto handle = native_handle();
   if (handle == static_cast<uint64_t>(-1)) {
     last_error_ = AsioErrorToWSAError(asio::error::not_socket);

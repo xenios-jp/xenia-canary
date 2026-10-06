@@ -7,15 +7,74 @@
  ******************************************************************************
  */
 
+#include <array>
+#include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <memory>
 #include <vector>
 
+#include "xenia/base/filesystem.h"
+#include "xenia/vfs/devices/host_path_device.h"
 #include "xenia/vfs/devices/stfs_xbox.h"
+#include "xenia/vfs/file.h"
 #include "xenia/vfs/gdfx_util.h"
 
 #include "third_party/catch/include/catch.hpp"
 
 namespace xe::vfs::test {
+
+TEST_CASE("Host file deletion waits for the last open handle", "[host_file]") {
+  struct TemporaryDirectory {
+    std::filesystem::path path =
+        std::filesystem::temp_directory_path() /
+        ("xenia-vfs-" +
+         std::to_string(
+             std::chrono::steady_clock::now().time_since_epoch().count()));
+    ~TemporaryDirectory() {
+      std::error_code error;
+      std::filesystem::remove_all(path, error);
+    }
+  } temporary;
+  REQUIRE(std::filesystem::create_directory(temporary.path));
+  const auto path = temporary.path / "shared.tmp";
+  {
+    std::ofstream stream(path);
+    stream << "abc";
+  }
+  HostPathDevice device("test:", temporary.path, false);
+  REQUIRE(device.Initialize());
+  auto* entry = device.ResolvePath("shared.tmp");
+  REQUIRE(entry);
+  auto close = [](File* file) {
+    if (file) {
+      file->Destroy();
+    }
+  };
+  std::unique_ptr<File, decltype(close)> first(nullptr, close),
+      second(nullptr, close);
+  File* opened = nullptr;
+  REQUIRE(entry->Open(filesystem::FileAccess::kGenericRead, &opened) ==
+          X_STATUS_SUCCESS);
+  first.reset(opened);
+  REQUIRE(entry->Open(filesystem::FileAccess::kGenericRead, &opened) ==
+          X_STATUS_SUCCESS);
+  second.reset(opened);
+  entry->SetForDeletion(true);
+  REQUIRE_FALSE(entry->Delete());
+  first.reset();
+  REQUIRE(std::filesystem::exists(path));
+  REQUIRE(second->entry()->device() == &device);
+  std::array<uint8_t, 3> bytes{};
+  size_t read = 0;
+  REQUIRE(second->ReadSync(bytes, 0, &read) == X_STATUS_SUCCESS);
+  REQUIRE(read == bytes.size());
+  REQUIRE(bytes == std::array<uint8_t, 3>{'a', 'b', 'c'});
+  second.reset();
+  REQUIRE_FALSE(std::filesystem::exists(path));
+  REQUIRE(device.ResolvePath("shared.tmp") == nullptr);
+}
 
 TEST_CASE("STFS Decode date and time", "[stfs_decode]") {
   SECTION("10 June 2022 19:46:00 UTC - Decode") {

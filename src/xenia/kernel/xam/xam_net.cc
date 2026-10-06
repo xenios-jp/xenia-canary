@@ -19,6 +19,7 @@
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xam/xam_module.h"
 #include "xenia/kernel/xam/xam_private.h"
+#include "xenia/kernel/xam/xnet_service.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_error.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_threading.h"
 #include "xenia/kernel/xevent.h"
@@ -189,6 +190,10 @@ XNetStartupParams xnet_startup_params = {0};
 
 dword_result_t NetDll_XNetStartup_entry(dword_t caller,
                                         pointer_t<XNetStartupParams> params) {
+  if (NativeLanEnabled() && !LocalLan(kernel_state())) {
+    return 10050;
+  }
+
   XELOGI("NetDll_XNetStartup: caller={}, params={:08X}", caller.value(),
          params.guest_address());
 
@@ -224,6 +229,10 @@ dword_result_t NetDll_XNetStartupEx_entry(dword_t caller,
 DECLARE_XAM_EXPORT1(NetDll_XNetStartupEx, kNetworking, kImplemented);
 
 dword_result_t NetDll_XNetCleanup_entry(dword_t caller, lpvoid_t params) {
+  if (auto lan = LocalLan(kernel_state())) {
+    lan->Reset();
+  }
+
   auto xam = kernel_state()->GetKernelModule<XamModule>("xam.xex");
   // auto xnet = xam->xnet();
   // xam->set_xnet(nullptr);
@@ -507,6 +516,17 @@ struct XnAddrStatus {
 
 dword_result_t NetDll_XNetGetTitleXnAddr_entry(dword_t caller,
                                                pointer_t<XNADDR> addr_ptr) {
+  if (NativeLanEnabled()) {
+    auto lan = LocalLan(kernel_state());
+    addr_ptr.Zero();
+    if (!lan) {
+      return 0;
+    }
+    std::memcpy(addr_ptr, &lan->identity(), sizeof(net::XnAddr));
+    return XnAddrStatus::XNET_GET_XNADDR_ETHERNET |
+           XnAddrStatus::XNET_GET_XNADDR_STATIC;
+  }
+
   // Just return a loopback address atm.
   addr_ptr->ina.s_addr = htonl(INADDR_LOOPBACK);
   addr_ptr->inaOnline.s_addr = 0;
@@ -542,7 +562,17 @@ DECLARE_XAM_EXPORT1(NetDll_XNetGetDebugXnAddr, kNetworking, kStub);
 
 dword_result_t NetDll_XNetXnAddrToMachineId_entry(dword_t caller,
                                                   pointer_t<XNADDR> addr_ptr,
-                                                  lpdword_t id_ptr) {
+                                                  lpqword_t id_ptr) {
+  if (NativeLanEnabled()) {
+    if (!addr_ptr || !id_ptr) {
+      return 10014;
+    }
+    net::XnAddr addr;
+    std::memcpy(&addr, addr_ptr, sizeof(addr));
+    *id_ptr = net::Lan::MachineId(addr);
+    return 0;
+  }
+
   // Tell the caller we're not signed in to live (non-zero ret)
   return 1;
 }
@@ -565,15 +595,52 @@ DECLARE_XAM_EXPORT1(NetDll_XNetInAddrToString, kNetworking, kStub);
 dword_result_t NetDll_XNetXnAddrToInAddr_entry(dword_t caller,
                                                pointer_t<XNADDR> xn_addr,
                                                lpvoid_t xid, lpvoid_t in_addr) {
+  if (NativeLanEnabled()) {
+    if (!xn_addr || !xid || !in_addr) {
+      return 10014;
+    }
+    auto lan = LocalLan(kernel_state());
+    if (!lan) {
+      return 10050;
+    }
+    net::XnAddr addr;
+    net::KeyId id;
+    uint32_t handle = 0;
+    std::memcpy(&addr, xn_addr, sizeof(addr));
+    std::memcpy(id.data(), xid, id.size());
+    const uint32_t result = lan->Map(addr, id, handle);
+    if (!result) {
+      xe::store_and_swap<uint32_t>(in_addr, handle);
+    }
+    return result;
+  }
+
   return 1;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetXnAddrToInAddr, kNetworking, kStub);
 
 // Does the reverse of the above.
-// FIXME: Arguments may not be correct.
-dword_result_t NetDll_XNetInAddrToXnAddr_entry(dword_t caller, lpvoid_t in_addr,
+dword_result_t NetDll_XNetInAddrToXnAddr_entry(dword_t caller, dword_t in_addr,
                                                pointer_t<XNADDR> xn_addr,
                                                lpvoid_t xid) {
+  if (NativeLanEnabled()) {
+    if (!xn_addr || !xid) {
+      return 10014;
+    }
+    auto lan = LocalLan(kernel_state());
+    if (!lan) {
+      return 10050;
+    }
+    net::XnAddr addr;
+    net::KeyId id;
+    const uint32_t result = lan->Reverse(in_addr, addr, id);
+    if (!result) {
+      std::memcpy(xn_addr, &addr, sizeof(addr));
+      std::memcpy(xid, id.data(), id.size());
+    }
+    return result;
+  }
+
   return 1;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetInAddrToXnAddr, kNetworking, kStub);
@@ -582,6 +649,10 @@ DECLARE_XAM_EXPORT1(NetDll_XNetInAddrToXnAddr, kNetworking, kStub);
 // Reserves a port for use by system link
 dword_result_t NetDll_XNetSetSystemLinkPort_entry(dword_t caller,
                                                   dword_t port) {
+  if (NativeLanEnabled()) {
+    return 0;
+  }
+
   return 1;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetSetSystemLinkPort, kNetworking, kStub);
@@ -596,6 +667,10 @@ struct XEthernetStatus {
 };
 
 dword_result_t NetDll_XNetGetEthernetLinkStatus_entry(dword_t caller) {
+  if (NativeLanEnabled()) {
+    return LocalLan(kernel_state()) ? 1 : 0;
+  }
+
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetGetEthernetLinkStatus, kNetworking, kStub);
@@ -1019,22 +1094,22 @@ struct host_set {
     }
   }
 
-  void Store(fd_set* native_set) {
+  void Store(fd_set* native_set, bool write = false) {
     FD_ZERO(native_set);
     for (uint32_t i = 0; i < this->count; ++i) {
       // Another guest thread can close a socket while select waits.
-      const auto handle = this->sockets[i]->native_handle();
+      const auto handle = this->sockets[i]->native_handle(write);
       if (handle != static_cast<uint64_t>(-1)) {
         FD_SET(handle, native_set);
       }
     }
   }
 
-  void UpdateFrom(fd_set* native_set) {
+  void UpdateFrom(fd_set* native_set, bool write = false) {
     uint32_t new_count = 0;
     for (uint32_t i = 0; i < this->count; ++i) {
       auto socket = this->sockets[i];
-      if (FD_ISSET(socket->native_handle(), native_set)) {
+      if (FD_ISSET(socket->native_handle(write), native_set)) {
         this->sockets[new_count++] = socket;
       }
     }
@@ -1060,7 +1135,7 @@ int_result_t NetDll_select_entry(dword_t caller, dword_t nfds,
   fd_set native_writefds = {0};
   if (writefds) {
     host_writefds.Load(writefds);
-    host_writefds.Store(&native_writefds);
+    host_writefds.Store(&native_writefds, true);
   }
   host_set host_exceptfds = {0};
   fd_set native_exceptfds = {0};
@@ -1108,7 +1183,7 @@ int_result_t NetDll_select_entry(dword_t caller, dword_t nfds,
         host_readfds.Store(&native_readfds);
       }
       if (writefds) {
-        host_writefds.Store(&native_writefds);
+        host_writefds.Store(&native_writefds, true);
       }
       if (exceptfds) {
         host_exceptfds.Store(&native_exceptfds);
@@ -1121,7 +1196,7 @@ int_result_t NetDll_select_entry(dword_t caller, dword_t nfds,
     host_readfds.Store(readfds);
   }
   if (writefds) {
-    host_writefds.UpdateFrom(&native_writefds);
+    host_writefds.UpdateFrom(&native_writefds, true);
     host_writefds.Store(writefds);
   }
   if (exceptfds) {
@@ -1317,6 +1392,18 @@ DECLARE_XAM_EXPORT1(NetDll_getpeername, kNetworking, kImplemented);
 
 dword_result_t NetDll_XNetCreateKey_entry(dword_t caller, lpdword_t key_id,
                                           lpdword_t exchange_key) {
+  if (NativeLanEnabled()) {
+    if (!key_id || !exchange_key) {
+      return 10014;
+    }
+    net::KeyId id;
+    net::Key key;
+    net::Lan::CreateKey(id, key);
+    std::memcpy(key_id, id.data(), id.size());
+    std::memcpy(exchange_key, key.data(), key.size());
+    return 0;
+  }
+
   kernel_memory()->Fill(key_id.guest_address(), 8, 0xBE);
   kernel_memory()->Fill(exchange_key.guest_address(), 16, 0xBE);
   return 0;
@@ -1325,15 +1412,61 @@ DECLARE_XAM_EXPORT1(NetDll_XNetCreateKey, kNetworking, kStub);
 
 dword_result_t NetDll_XNetRegisterKey_entry(dword_t caller, lpdword_t key_id,
                                             lpdword_t exchange_key) {
+  if (NativeLanEnabled()) {
+    if (!key_id || !exchange_key) {
+      return 10014;
+    }
+    auto lan = LocalLan(kernel_state());
+    if (!lan) {
+      return 10050;
+    }
+    net::KeyId id;
+    net::Key key;
+    std::memcpy(id.data(), key_id, id.size());
+    std::memcpy(key.data(), exchange_key, key.size());
+    return lan->RegisterKey(id, key);
+  }
+
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetRegisterKey, kNetworking, kStub);
 
 dword_result_t NetDll_XNetUnregisterKey_entry(dword_t caller,
                                               lpdword_t key_id) {
+  if (NativeLanEnabled()) {
+    if (!key_id) {
+      return 10014;
+    }
+    auto lan = LocalLan(kernel_state());
+    if (!lan) {
+      return 10050;
+    }
+    net::KeyId id;
+    std::memcpy(id.data(), key_id, id.size());
+    return lan->UnregisterKey(id);
+  }
+
   return 0;
 }
 DECLARE_XAM_EXPORT1(NetDll_XNetUnregisterKey, kNetworking, kStub);
+
+dword_result_t NetDll_XNetConnect_entry(dword_t caller, dword_t address) {
+  auto lan = LocalLan(kernel_state());
+  return lan ? lan->Connect(address) : 10050;
+}
+DECLARE_XAM_EXPORT1(NetDll_XNetConnect, kNetworking, kImplemented);
+dword_result_t NetDll_XNetGetConnectStatus_entry(dword_t caller,
+                                                 dword_t address) {
+  auto lan = LocalLan(kernel_state());
+  return lan ? lan->ConnectStatus(address) : 0;
+}
+DECLARE_XAM_EXPORT1(NetDll_XNetGetConnectStatus, kNetworking, kImplemented);
+dword_result_t NetDll_XNetUnregisterInAddr_entry(dword_t caller,
+                                                 dword_t address) {
+  auto lan = LocalLan(kernel_state());
+  return lan ? lan->Unmap(address) : 10050;
+}
+DECLARE_XAM_EXPORT1(NetDll_XNetUnregisterInAddr, kNetworking, kImplemented);
 
 // URL_COMPONENTSA with 32-bit guest pointers.
 struct X_URL_COMPONENTS {

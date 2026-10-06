@@ -21,6 +21,7 @@
 
 #include "xenia/base/byte_order.h"
 #include "xenia/kernel/xobject.h"
+#include "xenia/net/native_lan.h"
 
 namespace xe {
 namespace kernel {
@@ -116,7 +117,7 @@ class XSocket : public XObject {
 
   // Returns the native socket handle for use with select() etc.
   // Returns -1 if socket is not initialized.
-  uint64_t native_handle();
+  uint64_t native_handle(bool write = false);
   uint16_t bound_port() const { return bound_port_; }
 
   X_STATUS Initialize(AddressFamily af, Type type, Protocol proto);
@@ -198,6 +199,11 @@ class XSocket : public XObject {
   uint16_t bound_port_ = 0;
 
   bool broadcast_socket_ = false;
+  std::shared_ptr<net::Lan> lan_;
+  std::unique_ptr<net::secure::NativeDatagramTransport> lan_socket_;
+#if !XE_PLATFORM_WIN32
+  std::optional<asio::posix::stream_descriptor> lan_readiness_;
+#endif
 
   // The guest's own FIONBIO/WSAEventSelect choice, tracked separately from the
   // socket's live flag because RunCooperatively toggles that one itself.

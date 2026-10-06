@@ -200,6 +200,15 @@ elseif(APPLE)
     VERBATIM)
 endif()
 
+if(APPLE)
+  set_property(TARGET xenia-app APPEND PROPERTY LINK_DEPENDS
+               "${PROJECT_SOURCE_DIR}/src/xenia/net/mac/packet-access.sh")
+  target_sources(xenia-app PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/xenia/net/mac/packet-access.sh)
+  set_source_files_properties(${PROJECT_SOURCE_DIR}/src/xenia/net/mac/packet-access.sh
+    PROPERTIES MACOSX_PACKAGE_LOCATION Resources HEADER_FILE_ONLY TRUE)
+endif()
+
 xe_target_defaults(xenia-app)
 
 # Sign the bundle last, after every POST_BUILD step that drops files into
