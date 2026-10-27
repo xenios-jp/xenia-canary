@@ -391,11 +391,11 @@ def tests(cases):
             raise ValueError(f'case {i}: draws of both paths')
         path = paths.pop() if paths else None
         if c['full']:
-            if path != 0:
-                raise ValueError(f'case {i}: read back whole, not path 0')
+            if path not in (0, 1):
+                raise ValueError(f'case {i}: read back whole, no depth path')
             out.append({'name': f'{FORMATS[c["format"]]} {group} {i}',
                         'format': c['format'], 'clear': c['clear'],
-                        'path': 0, 'cases': [(i, c)]})
+                        'path': path, 'cases': [(i, c)]})
             continue
         if any(d['geometry'] or len(set(d['z'])) > 1 for d in c['draws']):
             raise ValueError(f'case {i}: read back as one word, not flat')
@@ -487,13 +487,17 @@ def build(suite, cases, samples=1):
             registers += [('PA_CL_CLIP_CNTL', [CLIP_DX]),
                           ('PA_CL_VTE_CNTL', [VTE_VIEWPORT])]
             for d in c['draws']:
+                texture = 'zero'
+                if path == 1:
+                    texture = f'full exported {f2w(d["exported"]):08X}'
+                    suite.add_texture(texture, rb.fill((d['exported'], 0, 0, 0)))
                 order, xy = vertex_order(d)
                 x0 = -1 + signed8(d['geometry'] >> 8)
                 y0 = -1 + signed8(d['geometry'] >> 16)
                 viewport = [f2w(v) for v in (17.0, x0 + 17.0, -17.0,
                                              y0 + 17.0, 1.0, 0.0)]
                 draws.append((state(d) + (('PA_CL_VPORT_XSCALE', viewport),),
-                              'zero', triangles(
+                              texture, triangles(
                                   [vertex(*xy[k], d['z'][k]) for k in order])))
         elif path is None:
             # Nothing to draw: one draw over the target, depth and stencil
