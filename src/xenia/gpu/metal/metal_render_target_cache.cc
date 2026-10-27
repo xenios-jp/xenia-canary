@@ -696,9 +696,6 @@ MetalRenderTargetCache::MetalRenderTarget::~MetalRenderTarget() {
   release(spare_depth_stencil_view_);
   release(spare_depth_texture_);
   release(stencil_view_);
-  if (draw_texture_ != texture_) {
-    release(draw_texture_);
-  }
   if (transfer_texture_ != texture_) {
     release(transfer_texture_);
   }
@@ -1846,10 +1843,10 @@ bool MetalRenderTargetCache::CanQueueDrawPassTransfers(
   }
 
   // The transfer draws have to write through the very texture the pass binds.
-  MTL::Texture* dest_draw_texture = dest_metal_rt->draw_texture();
+  MTL::Texture* dest_draw_texture = dest_metal_rt->texture();
   bool dest_is_uint = false;
   if (dest_key.is_depth) {
-    if (!dest_draw_texture || dest_draw_texture != dest_metal_rt->texture() ||
+    if (!dest_draw_texture ||
         dest_draw_texture->pixelFormat() !=
             GetDepthPixelFormat(dest_key.GetDepthFormat())) {
       return false;
@@ -1859,7 +1856,8 @@ bool MetalRenderTargetCache::CanQueueDrawPassTransfers(
         dest_key.GetColorFormat(), &dest_is_uint);
     if (dest_is_uint || !dest_draw_texture ||
         dest_draw_texture != dest_metal_rt->transfer_texture() ||
-        GetColorDrawPixelFormat(dest_key.GetColorFormat()) != transfer_format ||
+        GetColorResourcePixelFormat(dest_key.GetColorFormat()) !=
+            transfer_format ||
         dest_draw_texture->pixelFormat() != transfer_format) {
       return false;
     }
@@ -1874,9 +1872,9 @@ bool MetalRenderTargetCache::CanQueueDrawPassTransfers(
       if (!active_rt) {
         continue;
       }
-      MTL::Texture* active_draw_texture = active_rt->draw_texture();
+      MTL::Texture* active_draw_texture = active_rt->texture();
       if (rt == active_rt || texture == active_draw_texture ||
-          (rt && rt->draw_texture() == active_draw_texture)) {
+          (rt && rt->texture() == active_draw_texture)) {
         return true;
       }
       // Distinct keys can share one allocation (color storage aliasing).
@@ -1950,7 +1948,7 @@ bool MetalRenderTargetCache::PendingDrawPassTransfersFullyOverwriteTarget(
 
   auto* dest_metal_rt = static_cast<MetalRenderTarget*>(render_target);
   RenderTargetKey dest_key = dest_metal_rt->key();
-  MTL::Texture* dest_texture = dest_metal_rt->draw_texture();
+  MTL::Texture* dest_texture = dest_metal_rt->texture();
   if (!dest_texture) {
     return false;
   }
@@ -2019,7 +2017,7 @@ bool MetalRenderTargetCache::GetCurrentTransferAttachmentFormats(
   bool has_color_attachment = false;
   for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
     MTL::Texture* texture = current_color_targets_[i]
-                                ? current_color_targets_[i]->draw_texture()
+                                ? current_color_targets_[i]->texture()
                                 : nullptr;
     if (!texture) {
       continue;
@@ -2028,12 +2026,12 @@ bool MetalRenderTargetCache::GetCurrentTransferAttachmentFormats(
     has_color_attachment = true;
   }
   MTL::Texture* depth_texture =
-      current_depth_target_ ? current_depth_target_->draw_texture() : nullptr;
+      current_depth_target_ ? current_depth_target_->texture() : nullptr;
   // GetRenderPassDescriptor attaches a dummy 8_8_8_8 target at slot 0 when the
   // guest binds neither a color nor a depth target.
   if (!has_color_attachment && !depth_texture) {
     attachment_formats_out.color_attachment_formats[0] =
-        GetColorDrawPixelFormat(xenos::ColorRenderTargetFormat::k_8_8_8_8);
+        GetColorResourcePixelFormat(xenos::ColorRenderTargetFormat::k_8_8_8_8);
   }
   if (depth_texture) {
     MTL::PixelFormat depth_pixel_format = depth_texture->pixelFormat();
@@ -2297,15 +2295,8 @@ RenderTargetCache::RenderTarget* MetalRenderTargetCache::CreateRenderTarget(
   if (!key.is_depth) {
     MTL::PixelFormat resource_format =
         GetColorResourcePixelFormat(key.GetColorFormat());
-    MTL::PixelFormat draw_format =
-        GetColorDrawPixelFormat(key.GetColorFormat());
     MTL::PixelFormat transfer_format =
         GetColorOwnershipTransferPixelFormat(key.GetColorFormat(), nullptr);
-    if (draw_format != resource_format) {
-      MTL::Texture* draw_view = texture->newTextureView(draw_format);
-      RecordRenderTargetViewCreated();
-      render_target->SetDrawTexture(draw_view);
-    }
     if (transfer_format != resource_format) {
       MTL::Texture* transfer_view = texture->newTextureView(transfer_format);
       RecordRenderTargetViewCreated();
@@ -2448,11 +2439,9 @@ MTL::Texture* MetalRenderTargetCache::CreateColorTexture(
     uint32_t width, uint32_t height, xenos::ColorRenderTargetFormat format,
     uint32_t samples, bool transient_render_target_only) {
   MTL::PixelFormat resource_format = GetColorResourcePixelFormat(format);
-  MTL::PixelFormat draw_format = GetColorDrawPixelFormat(format);
   MTL::PixelFormat transfer_format =
       GetColorOwnershipTransferPixelFormat(format, nullptr);
-  bool needs_pixel_format_view =
-      draw_format != resource_format || transfer_format != resource_format;
+  bool needs_pixel_format_view = transfer_format != resource_format;
   // 4x 8_8_8_8 and 2_10_10_10 render targets at the same EDRAM layout may
   // share one allocation through views (FindUnorm32ColorStoragePartner).
   needs_pixel_format_view |=
@@ -2584,26 +2573,6 @@ MTL::PixelFormat MetalRenderTargetCache::GetColorResourcePixelFormat(
   }
 }
 
-MTL::PixelFormat MetalRenderTargetCache::GetColorDrawPixelFormat(
-    xenos::ColorRenderTargetFormat format) const {
-  switch (format) {
-    case xenos::ColorRenderTargetFormat::k_16_16:
-      return MTL::PixelFormatRG16Snorm;
-    case xenos::ColorRenderTargetFormat::k_16_16_16_16:
-      return MTL::PixelFormatRGBA16Snorm;
-    case xenos::ColorRenderTargetFormat::k_16_16_FLOAT:
-      return MTL::PixelFormatRG16Float;
-    case xenos::ColorRenderTargetFormat::k_16_16_16_16_FLOAT:
-      return MTL::PixelFormatRGBA16Float;
-    case xenos::ColorRenderTargetFormat::k_32_FLOAT:
-      return MTL::PixelFormatR32Float;
-    case xenos::ColorRenderTargetFormat::k_32_32_FLOAT:
-      return MTL::PixelFormatRG32Float;
-    default:
-      return GetColorResourcePixelFormat(format);
-  }
-}
-
 MTL::PixelFormat MetalRenderTargetCache::GetColorOwnershipTransferPixelFormat(
     xenos::ColorRenderTargetFormat format, bool* is_integer_out) const {
   if (is_integer_out) {
@@ -2720,7 +2689,7 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
   // Bind depth target if present
   if (current_depth_target_ && current_depth_target_->texture()) {
     auto* depth_attachment = cached_render_pass_descriptor_->depthAttachment();
-    depth_attachment->setTexture(current_depth_target_->draw_texture());
+    depth_attachment->setTexture(current_depth_target_->texture());
 
     // Clear on first bind to avoid synchronous clears at creation.
     uint32_t depth_key = current_depth_target_->key().key;
@@ -2740,13 +2709,13 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
     // stencil attachment too (Metal requires explicit stencil attachment
     // binding to match pipeline state).
     MTL::PixelFormat depth_pixel_format =
-        current_depth_target_->draw_texture()->pixelFormat();
+        current_depth_target_->texture()->pixelFormat();
     if (depth_pixel_format == MTL::PixelFormatDepth32Float_Stencil8 ||
         depth_pixel_format == MTL::PixelFormatDepth24Unorm_Stencil8 ||
         depth_pixel_format == MTL::PixelFormatX32_Stencil8) {
       auto* stencil_attachment =
           cached_render_pass_descriptor_->stencilAttachment();
-      stencil_attachment->setTexture(current_depth_target_->draw_texture());
+      stencil_attachment->setTexture(current_depth_target_->texture());
       if (depth_needs_clear) {
         stencil_attachment->setLoadAction(MTL::LoadActionClear);
         stencil_attachment->setClearStencil(0);
@@ -2765,16 +2734,16 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
     // Track this as a real render target for capture
     last_real_depth_target_ = current_depth_target_;
 
-    if (!coverage_width && current_depth_target_->draw_texture()) {
+    if (!coverage_width && current_depth_target_->texture()) {
       coverage_width =
-          static_cast<uint32_t>(current_depth_target_->draw_texture()->width());
-      coverage_height = static_cast<uint32_t>(
-          current_depth_target_->draw_texture()->height());
-      if (current_depth_target_->draw_texture()->sampleCount() > 0) {
+          static_cast<uint32_t>(current_depth_target_->texture()->width());
+      coverage_height =
+          static_cast<uint32_t>(current_depth_target_->texture()->height());
+      if (current_depth_target_->texture()->sampleCount() > 0) {
         coverage_samples = std::max<uint32_t>(
             coverage_samples,
             static_cast<uint32_t>(
-                current_depth_target_->draw_texture()->sampleCount()));
+                current_depth_target_->texture()->sampleCount()));
       }
     }
   }
@@ -2784,7 +2753,7 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
     if (current_color_targets_[i] && current_color_targets_[i]->texture()) {
       auto* color_attachment =
           cached_render_pass_descriptor_->colorAttachments()->object(i);
-      color_attachment->setTexture(current_color_targets_[i]->draw_texture());
+      color_attachment->setTexture(current_color_targets_[i]->texture());
 
       // Clear on first bind to avoid synchronous clears at creation.
       bool color_needs_clear = current_color_targets_[i]->needs_initial_clear();
@@ -2809,14 +2778,14 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
 
       if (!coverage_width) {
         coverage_width = static_cast<uint32_t>(
-            current_color_targets_[i]->draw_texture()->width());
+            current_color_targets_[i]->texture()->width());
         coverage_height = static_cast<uint32_t>(
-            current_color_targets_[i]->draw_texture()->height());
-        if (current_color_targets_[i]->draw_texture()->sampleCount() > 0) {
+            current_color_targets_[i]->texture()->height());
+        if (current_color_targets_[i]->texture()->sampleCount() > 0) {
           coverage_samples = std::max<uint32_t>(
               coverage_samples,
               static_cast<uint32_t>(
-                  current_color_targets_[i]->draw_texture()->sampleCount()));
+                  current_color_targets_[i]->texture()->sampleCount()));
         }
       }
     }
@@ -2826,7 +2795,7 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
   // like the RTV D3D12 and Vulkan always bind when drawing. A depth-only pass
   // has no color attachment.
   const bool omit_dummy_color =
-      current_depth_target_ && current_depth_target_->draw_texture();
+      current_depth_target_ && current_depth_target_->texture();
   if (!has_any_color_target && !omit_dummy_color) {
     uint32_t samples = std::max(1u, expected_sample_count);
 
@@ -2923,21 +2892,21 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
 
     auto* color_attachment =
         cached_render_pass_descriptor_->colorAttachments()->object(0);
-    color_attachment->setTexture(dummy_color_target_->draw_texture());
+    color_attachment->setTexture(dummy_color_target_->texture());
     color_attachment->setLoadAction(MTL::LoadActionDontCare);
     color_attachment->setStoreAction(MTL::StoreActionDontCare);
 
     has_any_render_target = true;
-    if (!coverage_width && dummy_color_target_->draw_texture()) {
+    if (!coverage_width && dummy_color_target_->texture()) {
       coverage_width =
-          static_cast<uint32_t>(dummy_color_target_->draw_texture()->width());
+          static_cast<uint32_t>(dummy_color_target_->texture()->width());
       coverage_height =
-          static_cast<uint32_t>(dummy_color_target_->draw_texture()->height());
-      if (dummy_color_target_->draw_texture()->sampleCount() > 0) {
+          static_cast<uint32_t>(dummy_color_target_->texture()->height());
+      if (dummy_color_target_->texture()->sampleCount() > 0) {
         coverage_samples = std::max<uint32_t>(
             coverage_samples,
             static_cast<uint32_t>(
-                dummy_color_target_->draw_texture()->sampleCount()));
+                dummy_color_target_->texture()->sampleCount()));
       }
     }
   } else if (!has_any_color_target) {
@@ -2987,7 +2956,7 @@ bool MetalRenderTargetCache::IsRenderPassDescriptorCompatible(
   auto* depth_attachment = pass_descriptor->depthAttachment();
   auto* stencil_attachment = pass_descriptor->stencilAttachment();
   MTL::Texture* expected_depth =
-      current_depth_target_ ? current_depth_target_->draw_texture() : nullptr;
+      current_depth_target_ ? current_depth_target_->texture() : nullptr;
   if (expected_depth) {
     if (!depth_attachment || depth_attachment->texture() != expected_depth) {
       return false;
@@ -3012,8 +2981,7 @@ bool MetalRenderTargetCache::IsRenderPassDescriptorCompatible(
 
   bool has_current_color_target = false;
   for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
-    if (current_color_targets_[i] &&
-        current_color_targets_[i]->draw_texture()) {
+    if (current_color_targets_[i] && current_color_targets_[i]->texture()) {
       has_current_color_target = true;
       break;
     }
@@ -3021,9 +2989,9 @@ bool MetalRenderTargetCache::IsRenderPassDescriptorCompatible(
   auto* color_attachments = pass_descriptor->colorAttachments();
   for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
     MTL::Texture* actual_color = color_attachments->object(i)->texture();
-    MTL::Texture* expected_color =
-        current_color_targets_[i] ? current_color_targets_[i]->draw_texture()
-                                  : nullptr;
+    MTL::Texture* expected_color = current_color_targets_[i]
+                                       ? current_color_targets_[i]->texture()
+                                       : nullptr;
     if (expected_color) {
       if (actual_color != expected_color) {
         return false;
@@ -3041,7 +3009,7 @@ bool MetalRenderTargetCache::IsRenderPassDescriptorCompatible(
     return color_attachments->object(0)->texture() == nullptr;
   }
   MTL::Texture* expected_dummy =
-      dummy_color_target_ ? dummy_color_target_->draw_texture() : nullptr;
+      dummy_color_target_ ? dummy_color_target_->texture() : nullptr;
   return expected_dummy &&
          color_attachments->object(0)->texture() == expected_dummy;
 }
@@ -3063,19 +3031,19 @@ MTL::Texture* MetalRenderTargetCache::GetColorTargetForDraw(
   if (index >= 4 || !current_color_targets_[index]) {
     return nullptr;
   }
-  return current_color_targets_[index]->draw_texture();
+  return current_color_targets_[index]->texture();
 }
 
 MTL::Texture* MetalRenderTargetCache::GetDepthTargetForDraw() const {
   if (!current_depth_target_) {
     return nullptr;
   }
-  return current_depth_target_->draw_texture();
+  return current_depth_target_->texture();
 }
 
 MTL::Texture* MetalRenderTargetCache::GetDummyColorTargetForDraw() const {
-  if (dummy_color_target_ && dummy_color_target_->draw_texture()) {
-    return dummy_color_target_->draw_texture();
+  if (dummy_color_target_ && dummy_color_target_->texture()) {
+    return dummy_color_target_->texture();
   }
   return nullptr;
 }
