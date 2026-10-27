@@ -109,6 +109,9 @@ Suites:
   each operand swept or held.
 - `extreme`, `sweeprcp`, `sweeplogh`: products and sums at the edges of the
   float range, rcp over [1, 2) and log over [0.5, 1), every mantissa.
+- `destbase`, `destpitch`, `surfpitch`: Resolve destination bases off 4
+  KiB, destination pitches off 32 texels and surface pitches off 80-pixel
+  tiles, which titles never program (`cpmem`).
 - `edramraw`: the converting Resolve that reads every EDRAM word back
   unchanged, for a dump of the whole EDRAM.
 - Arithmetic (`smoke`, `alu`, `specials`, `ops2`): products and sums,
@@ -175,6 +178,17 @@ Suites:
   pixel keeps running and voting but exports nothing after the kill. Loop
   N reads loop constant N, aL and a0 relative reads are per pixel, and an
   export's dest_rel bits don't add aL.
+- Resolves (`resolverect`): the destination texel is the rectangle's pixel
+  after PA_SC_WINDOW_OFFSET, even with vtx_window_offset_enable clear.
+  For a 32bpp tiled destination at RB_COPY_DEST_BASE B, the texel at tiled
+  offset p goes to the swizzle of ((p + ((B >> 3) & ~0x1F)) & ~0x3F) | (p &
+  0x3F): bits 0-7 of B do nothing and bits 8-11 move texels within their
+  tile, even below B (`destbase`). A destination row has floor(pitch / 32)
+  macro tiles, the later row winning a tile two land on (`destpitch`). A
+  surface row has floor(pitch / 80) EDRAM tiles (2 pitch / 80 at 4x),
+  pixels past them wrapping into the next row and the later one winning;
+  the pitch clamps neither the draw nor the Resolve (`surfpitch`). Titles
+  program none of these.
 - Shader constants and loads (`cpload`, `cpload2`, `cpalign`):
   LOAD_ALU_CONSTANT copies its dwords into the constants from its index (4
   per constant, the pixel shader's from 1024: 2032 and 2016 load its
