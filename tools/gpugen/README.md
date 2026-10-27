@@ -82,6 +82,11 @@ run. Things the console needs that Xenia doesn't:
 - PsParamGen.xy is the pixel position only with
   SQ_CONTEXT_MISC.sc_output_screen_xy, and multisampling takes
   PA_SC_AA_CONFIG as well as RB_SURFACE_INFO.msaa_samples.
+- These wedge the GPU: texture fetches of formats 0, 1, 13, 21, 57, 62 and
+  63 (`tfetch_formats` stops at its test of format 1); a VGT_DMA_SIZE shorter
+  than the indices (it counts 16-bit words); a Resolve rectangle off the
+  8-pixel grid, or its vertices off the half-pixel one; a VIZ_QUERY with
+  PA_SC_VIZ_QUERY 0. No other suite has them.
 - An EVENT_WRITE_ZPD report whose RB_SAMPLE_COUNT_CTL doesn't copy (bit 1)
   makes every report after it lag a draw, and the dashboard couldn't launch
   titles after a run with them: gpugen refuses them.
@@ -100,8 +105,18 @@ Suites:
   conversions, block formats, endianness, filtering and addressing.
 - `getbcf`: getBCF in each clamp mode, filter, format and dimension, next to
   a tfetch of the border at the same coordinates.
-- `pixel`, `pixel_probes`, `snap`, `msaa`: pixel shader inputs (interpolation,
-  PsParamGen), vertex snapping and multisample coverage.
+- `pixel`, `pixel_probes`, `snap`, `snap2`, `msaa`: pixel shader inputs
+  (interpolation, PsParamGen), vertex snapping and multisample coverage.
+  `centroid`: where smooth interpolators are evaluated by sc_sample_cntl and
+  sampling_pattern.
+- `primitives`, `indices`: strips, fans, quads and line strips; indexed draws,
+  index offsets, the vertex index clamp and primitive reset.
+- `flow`: shader control flow, predication, loops, calls and jumps.
+- `psflow1`: pixel shader control flow in the forms titles use, with
+  predicates differing inside a vector (`psflow`, which also has the
+  triangle and point vector shapes that change from run to run).
+- `tmips`, `impulse`, `normpoint`, `texdecode`, `bc`: mip levels, layouts,
+  LOD and filtering, point sampling and BC alpha and red decoding.
 - `rb`, `blend`, `depth`, `zdepth`, `alpha`, `msaarb`: render target formats,
   blending, depth formats and polygon offset, alpha test and alpha to mask,
   MSAA samples and resolves.
@@ -142,6 +157,8 @@ Suites:
 - `destbase`, `destpitch`, `surfpitch`: Resolve destination bases off 4
   KiB, destination pitches off 32 texels and surface pitches off 80-pixel
   tiles, which titles never program (`cpmem`).
+- `texcube`, `texstack`, `texlod`, `texgrad`, `texaniso`: vertex shader cube
+  map, stacked and 3D fetches, fine LOD, gradient LOD and anisotropy.
 - `edramraw`: the converting Resolve that reads every EDRAM word back
   unchanged, for a dump of the whole EDRAM.
 - `aamask`: which samples of which pixels each PA_SC_AA_MASK bit enables,
@@ -213,6 +230,93 @@ What the console does, beyond what the expected results show:
   pixel keeps running and voting but exports nothing after the kill. Loop
   N reads loop constant N, aL and a0 relative reads are per pixel, and an
   export's dest_rel bits don't add aL.
+- Mips (`tmips`): at an LOD fraction of exactly .5 mip point picks the
+  next, smaller level. A texture wholly in its packed tail reads it from the
+  base address. tri_clamp n = 1, 2
+  or 3 leaves dead zones of 1/6, 1/4 or 3/8 at each end of a level: the
+  blend weight in 1/64 is clamp(floor((f - 64 d) / (1 - 2 d)), 0, 64).
+- LOD (`texlod`, `texgrad`): the register LOD truncates toward zero to 1/64
+  before the fetch constant's lod_bias (1/32) and the instruction's (1/16)
+  are added, and the blend weight is the 1/64 fraction of the sum.
+  exp_adjust scales by exactly 2^n. A vertex shader's 4 consecutive
+  vertices share the first one's gradient LOD. log2 is a table, 64 e +
+  floor(64 log2(1 + m / 64)) for the top 6 mantissa bits m; a gradient's
+  length is that of its larger component, plus (128 - j) / 2^(k + 2) for
+  (k, j) = divmod(difference of the two logs, 64) when neither is 0, and
+  the isotropic LOD is floor(max(len H, len V)) / 64.
+- Anisotropy (`texaniso`, `texgrad`): at N:1 the LOD is max(major - 64
+  log2 N, min(major, minor + 8 B)), minor = lut(|hx vy - hy vx|) - major and
+  B aniso_bias as an unsigned 4-bit field in 1/8 octaves. A vertex shader's
+  fetch takes a single tap at that LOD, with no spread along the major
+  axis. Rotated gradients aren't modelled yet.
+- Cube maps (`texcube`): the face is floor(z), 6 to 7.99 reading face 0,
+  addressed by clamp(s - 1, 0, 1) and clamp(t - 1, 0, 1) as a 2D layer
+  under the fetch constant's clamp modes (at exactly 1 the mode decides).
+  Filtering never crosses a face edge.
+- Stacked and 3D textures (`texstack`): the slice is addressed like u and
+  v, clamp_z (wrap too) applying to each slice after the half slice offset.
+  Linear z filtering blends two slices by a 5-bit weight on stacked
+  textures, t = floor(32 w D) - 16 giving slice t >> 5 and weight
+  (t & 31) / 32, and by a 6-bit one on 3D textures.
+- Packed mip tails (`tailmips`, `tailmips2`, `tailmips3`): the level
+  `p = max(ceil(log2(min(w, h))) - 4, 0)` is the first of the packed tail;
+  level 0 is at the base address and levels 1 up at the mip address, in
+  4 KiB aligned slices of the power of two level sizes (linear rows to 256
+  bytes, tiled to 32x32 blocks). The tail sits in the slice of level `p`,
+  level `p + q` at (x, y) in texels (blocks for DXT1 and DXN, divided by 4):
+  for q < 3 (0, 16 >> q) when the texture is wider than tall and
+  (16 >> q, 0) otherwise, and from q = 3 on (2^(log2 long side - p) >> (q - 2))
+  along the long side. The LOD clamps to the fetch constant's levels. A
+  texture wholly in its tail (a side of 16 or less) reads all of it from the
+  base address, and a texture without a mip address does as well. With the
+  same address for base and mips only the mip address is read. `levels 0-N`
+  and `1-N` give the same tail. Tiled and linear agree, as do 1, 2, 4, 8
+  and 16 byte blocks.
+- Fill of the components a format lacks (`texholeswz`): 1-component formats
+  (8, 8_A, 8_B, 16, 16_FLOAT, 32_FLOAT, 24_8, DXT5A) read RRRR, 2-component
+  ones (8_8, 16_16, 16_16_FLOAT, 16_16_EXPAND, 32_32_FLOAT, DXN, CTX1) RGRG,
+  3-component ones (5_6_5, 6_5_5, 10_11_11, 11_11_10) RGBR. 4-component
+  formats are untouched (1_5_5_5, 4_4_4_4 and 2_10_10_10 have their alpha).
+- Unorm conversion (`texholeswz`, `texholefmt`, `texholedepth`): an n-bit
+  field n converts as RTZ((n r + (n >> (k - 1))) / 2^F) in float, with
+  k bits, rep r and shift F: 4 bits r 4369 F 16, 5 bits 33 F 10, 6 bits 65
+  F 12, 8 bits 257 F 16, 10 bits 1025 F 20, 16 bits n / 65535 rounded
+  toward zero. A 2-bit alpha of 2_10_10_10_AS_16 is expanded as 10 bits
+  (r 0x55555, F 20). Signed 8-bit is sign and magnitude m (7 bits):
+  (129 m + (m >> 6)) / 2^14, -128 and -127 give -1. Signed 16-bit is sign
+  and magnitude m = min(|v|, 32767): RTZ((32769 m + (m >> 14)) / 2^30).
+  DXT1 colours expand to 8 bits first and convert with the 8-bit rule
+  (134 gives 0x3F068700).
+- 24_8 (`texholedepth`): num_format 0 reads d / 2^24 exactly for d below
+  2^15; above, one ulp higher when k = d >> 15 has k & (k + 1) == 0 (d from
+  2^b - 2^15 up, b the bit length of d: 0xFFFFFF is 1.0, 0xFFFFFE
+  0x3F7FFFFF). num_format 1 reads the integer d as a float. Bilinear is a
+  float lerp of the converted values. 24_8_FLOAT is the 20e4 decode
+  ((1 + m / 2^20) 2^(e - 15), denormal m 2^-34) for both num_formats;
+  bilinear lerps each of the three depth bytes as an 8-bit channel with
+  6-bit weights ((a (64 - w) + b w) >> 6, 2D one stage
+  (a (64-x)(64-y) + b x (64-y) + c (64-x) y + d x y) >> 12) and then decodes.
+- EXPAND formats (`texholeexp`, `texholeexp2`): a half h converts to the
+  integer I = trunc(65536 h), infinities and NaN counting as huge.
+  num_format 0 (fraction): signed gives sign RTZ(|I|) / 2^31 with I clamped
+  to +-2^31 (+inf and NaN 1.0, -inf -1.0, -0 +0); unsigned RTZ((I mod 2^32 +
+  (I < 0)) / 2^32). num_format 1, which games set (signed for
+  16_16_16_16_EXPAND): signed RTZ(I) / 2^16 sign and magnitude, I clamped to
+  [-2^31, 2^31 - 1] (+32767.998, 0x46FFFFFF, and -32768 for inf or NaN);
+  unsigned RTZ(I mod 2^32) / 2^16. So |h| below 2^-7 truncates to multiples of
+  2^-16. Exact over all 65536 values of 16_EXPAND, 16_16_EXPAND and
+  16_16_16_16_EXPAND.
+- exp_adjust (`texholefmt`, `texholecube`): a power of two scale 2^n of the
+  converted result for n = -32 .. 31, point, bilinear, signed and cube
+  faces; 32_FLOAT keeps denormals before the scale.
+- Filters (`texholefilt`): the combinations games use all behave as
+  tmips and texlod describe at an explicit LOD: basemap with linear filters
+  blends the base level bilinearly whatever the LOD; mixed mag and min
+  filters, lod_bias from -128 to 74 (1/32 level) and the fetch instruction's
+  filters over the constant's (mip point, basemap, point mag or min) pick the
+  same level and blend as the constant's would; the blend weights are 1/64. A vertex shader's fetch with
+  a basemap or mip point filter and aniso 2:1 or more takes a single tap
+  (no anisotropic spread).
 - Resolves (`resolverect`): the destination texel is the rectangle's pixel
   after PA_SC_WINDOW_OFFSET, even with vtx_window_offset_enable clear.
   For a 32bpp tiled destination at RB_COPY_DEST_BASE B, the texel at tiled
