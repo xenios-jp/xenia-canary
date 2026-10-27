@@ -107,5 +107,46 @@ Suites:
   MSAA samples and resolves.
 - `blend_products`: blending on the fixed point formats one product at a time,
   each operand swept or held.
+- `extreme`, `sweeprcp`, `sweeplogh`: products and sums at the edges of the
+  float range, rcp over [1, 2) and log over [0.5, 1), every mantissa.
 - `edramraw`: the converting Resolve that reads every EDRAM word back
   unchanged, for a dump of the whole EDRAM.
+- Arithmetic (`smoke`, `alu`, `specials`, `ops2`): products and sums,
+  vector and scalar, round toward zero, an overflow to the largest finite
+  value and anything below 2^-126 to zero. mad rounds its product, then the
+  sum, the product keeping its exponent unbounded.
+- Dot products (`dot`, `dotprobe`): dp4, dp3 and dp2add round each product
+  toward zero, exponent unbounded, then add the terms from the last (dp2add
+  its addend, then y, then x) into a two's complement fixed point
+  accumulator. Before each addition its unit becomes 2^(e - 24), e the
+  largest exponent of the terms so far and of the accumulator as two's
+  complement (-2^n counts as 2^(n-1)), and the accumulator and the term are
+  floored to it. The sum rounds toward zero, as above.
+- At the edges of the range (`extreme`): a denormal operand reads as a
+  zero of its sign. mul (and muls, muls_prev) with a zero operand is +0
+  whatever the other, NaN and Inf too; otherwise the first NaN operand
+  comes out unchanged. add passes the first NaN, gives FFC00000 for
+  opposite Infs and +0 for an exact zero sum unless both addends are -0.
+  mad's product keeps an unbounded exponent into the sum, and an Inf
+  product against an opposite Inf addend is FFC00000. In dp4, dp3 and
+  dp2add any NaN term, or Infs of both signs, give FFC00000; the
+  accumulator's exponent never goes below -127, and a result under 2^-126
+  is a zero with the accumulator's sign, so a positive sum of tiny terms
+  can be -0.
+- max4 (`extreme`, `max4probe`): r = w, then r = v >= r ? v : r for z, y
+  and x in turn, so a NaN in w comes out, NaNs elsewhere are skipped and a
+  tie keeps the lower lane's bits. cube's doubled major axis is a mul
+  (overflow to the largest finite value, zero to +0). muls_prev2 is
+  -FLT_MAX unless src0.b > 0 and ps > -FLT_MAX.
+- Transcendentals (`sweeprcp`, `sweeplogh`, `sweep`, `transcendental`):
+  rcp, rsq, sqrt, log and exp are tables repeating per exponent, with no
+  closed form found. rcp is within -2..+3 units of floor(2^24 / m) (equal for
+  71%). rsq and sqrt take one table for even exponents and one for odd. log's
+  fraction is a 25 bit fixed point value, and a negative sum (x < 1) is held
+  as its one's complement before rounding toward zero. exp truncates its
+  input to 23 fraction bits, a negative fraction taken as the one's
+  complement. Input 16g + l of a table, l = 1..15, is floor(Z_g + a_s l),
+  with one offset Z_g per 16 inputs and one slope a_s per 2^18:
+  `transcendental_tables.py` packs the sweeps into Xenia's
+  xenos_transcendentals table this way. Denormal inputs
+  read as zero, results under 2^-126 are +0, and NaN comes back as is.
