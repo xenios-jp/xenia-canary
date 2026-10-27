@@ -764,10 +764,9 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
               : 0.0f;
     } break;
     case ucode::AluScalarOpcode::kMulsPrev2: {
-      if (state_.previous_scalar == -FLT_MAX ||
-          !std::isfinite(state_.previous_scalar) ||
-          !std::isfinite(scalar_operands[1]) ||
-          std::islessequal(scalar_operands[1], 0.0f)) {
+      // ps > -FLT_MAX and src0.b > 0, as the console checks it.
+      if (!std::isgreater(state_.previous_scalar, -FLT_MAX) ||
+          !std::isgreater(scalar_operands[1], 0.0f)) {
         state_.previous_scalar = -FLT_MAX;
       } else {
         // Direct3D 9 behavior (0 or denormal * anything = +0).

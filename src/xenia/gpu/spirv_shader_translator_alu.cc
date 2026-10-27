@@ -1382,11 +1382,37 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
       }
       assert_true(id_vector_temp_.size() == used_result_component_count);
       if (used_result_components & 0b0100) {
-        // Multiply the major axis by 2.
+        // Multiply the major axis by 2 as the console's mul does: a zero gives
+        // +0, an overflow the largest finite value of the sign, and a NaN
+        // comes out with its bits.
         spv::Id& ma2 = id_vector_temp_[xe::bit_count(used_result_components &
                                                      ((1 << 2) - 1))];
+        spv::Id ma = ma2;
         ma2 = builder_->createNoContractionBinOp(
-            spv::OpFMul, type_float_, builder_->makeFloatConstant(2.0f), ma2);
+            spv::OpFMul, type_float_, builder_->makeFloatConstant(2.0f), ma);
+        ma2 = builder_->createTriOp(
+            spv::OpSelect, type_float_,
+            builder_->createBinOp(
+                spv::OpLogicalAnd, type_bool_,
+                builder_->createUnaryOp(spv::OpIsInf, type_bool_, ma2),
+                builder_->createUnaryOp(
+                    spv::OpLogicalNot, type_bool_,
+                    builder_->createUnaryOp(spv::OpIsInf, type_bool_, ma))),
+            builder_->createTriOp(
+                spv::OpSelect, type_float_,
+                builder_->createBinOp(spv::OpFOrdLessThan, type_bool_, ma,
+                                      const_float_0_),
+                builder_->makeFloatConstant(-FLT_MAX),
+                builder_->makeFloatConstant(FLT_MAX)),
+            ma2);
+        ma2 = builder_->createTriOp(
+            spv::OpSelect, type_float_,
+            builder_->createBinOp(spv::OpFOrdEqual, type_bool_, ma,
+                                  const_float_0_),
+            const_float_0_, ma2);
+        ma2 = builder_->createTriOp(
+            spv::OpSelect, type_float_,
+            builder_->createUnaryOp(spv::OpIsNan, type_bool_, ma), ma, ma2);
       }
       if (used_result_component_count == 1) {
         // Only one component - not composite.
@@ -1699,41 +1725,17 @@ spv::Id SpirvShaderTranslator::ProcessScalarAluOperation(
       // the condition before it.
       spv::Id ps =
           builder_->createLoad(var_main_previous_scalar_, spv::NoPrecision);
-      // ps != -FLT_MAX.
+      // ps > -FLT_MAX and src0.b > 0, as the console checks it: a NaN or -Inf
+      // ps or a NaN src0.b fails, a +Inf one passes.
       spv::Id const_float_max_neg = builder_->makeFloatConstant(-FLT_MAX);
-      spv::Id condition = builder_->createBinOp(
-          spv::OpFUnordNotEqual, type_bool_, ps, const_float_max_neg);
-      // isfinite(ps), or |ps| <= FLT_MAX, or -|ps| >= -FLT_MAX, since -FLT_MAX
-      // is already loaded to an SGPR, this is also false if it's NaN.
       spv::Id ps_abs = builder_->createUnaryBuiltinCall(
           type_float_, ext_inst_glsl_std_450_, GLSLstd450FAbs, ps);
-      spv::Id ps_abs_neg = builder_->createNoContractionUnaryOp(
-          spv::OpFNegate, type_float_, ps_abs);
-      condition = builder_->createBinOp(
-          spv::OpLogicalAnd, type_bool_, condition,
-          builder_->createBinOp(spv::OpFOrdGreaterThanEqual, type_bool_,
-                                ps_abs_neg, const_float_max_neg));
-      // isfinite(src0.b), or -|src0.b| >= -FLT_MAX for the same reason.
       spv::Id b = GetOperandComponents(operand_storage[0],
                                        instr.scalar_operands[0], 0b0010);
-      spv::Id b_abs_neg = b;
-      if (!instr.scalar_operands[0].is_absolute_value) {
-        b_abs_neg = builder_->createUnaryBuiltinCall(
-            type_float_, ext_inst_glsl_std_450_, GLSLstd450FAbs, b_abs_neg);
-      }
-      if (!instr.scalar_operands[0].is_absolute_value ||
-          !instr.scalar_operands[0].is_negated) {
-        b_abs_neg = builder_->createNoContractionUnaryOp(
-            spv::OpFNegate, type_float_, b_abs_neg);
-      }
-      condition = builder_->createBinOp(
-          spv::OpLogicalAnd, type_bool_, condition,
-          builder_->createBinOp(spv::OpFOrdGreaterThanEqual, type_bool_,
-                                b_abs_neg, const_float_max_neg));
-      // src0.b > 0 (need !(src0.b <= 0), but src0.b has already been checked
-      // for NaN).
-      condition = builder_->createBinOp(
-          spv::OpLogicalAnd, type_bool_, condition,
+      spv::Id condition = builder_->createBinOp(
+          spv::OpLogicalAnd, type_bool_,
+          builder_->createBinOp(spv::OpFOrdGreaterThan, type_bool_, ps,
+                                const_float_max_neg),
           builder_->createBinOp(spv::OpFOrdGreaterThan, type_bool_, b,
                                 const_float_0_));
       SpirvBuilder::IfBuilder multiply_if(
