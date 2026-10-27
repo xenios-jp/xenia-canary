@@ -1,0 +1,6 @@
+{
+ "suite": "mexportendian",
+ "source": "Xbox 360; three identical complete same-build captures 2026-10-27. SHA256 570b5cf86c4ceaef6806f9fcfe305933dcafa6168bb09b166cd8c53c1c26e53d. Repeats preserved in build-mac/upstream-fixes-20261027/tests/mexportendian/verified/run-{1,2,3}-console_results.bin.",
+ "xtr": "b8a5b92e029ff763fd5167825b81f0a1ad74042a",
+ "results": "2e4a550ff5f9a985ab958767811b06e948fd73d0"
+}

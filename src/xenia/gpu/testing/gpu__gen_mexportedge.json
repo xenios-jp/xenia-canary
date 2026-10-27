@@ -1,0 +1,6 @@
+{
+ "suite": "mexportedge",
+ "source": "Xbox 360; three identical complete same-build captures 2026-10-27. SHA256 a109203fb6d871d2c3a01f420fd46f68e1a4320e3b048534637d24f085c83309. Repeats preserved in build-mac/upstream-fixes-20261027/tests/mexportedge/verified/run-{1,2,3}-console_results.bin.",
+ "xtr": "5132f70a9ba78baae446894d8a3556f2b6295394",
+ "results": "4ded8958672339a9d50ed60913f7774bc762e59b"
+}

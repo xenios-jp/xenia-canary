@@ -1,0 +1,6 @@
+{
+ "suite": "mexportlanes",
+ "source": "Xbox 360; three identical complete same-build captures 2026-10-27. SHA256 6cc4ccdca4d9fe2fc317537bf1f70ea05aaa94cf4d145b4cb1d35c2844f055cd. Repeats preserved in build-mac/upstream-fixes-20261027/tests/mexportlanes/verified/run-{1,2,3}-console_results.bin.",
+ "xtr": "65391d04074dbee2f420f2986c227da07fffe009",
+ "results": "042ddc8ba989cac8d5dcf508fee7e65e9e098e47"
+}

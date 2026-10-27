@@ -1,0 +1,6 @@
+{
+ "suite": "mexportmask",
+ "source": "Xbox 360; three identical complete same-build captures 2026-10-27. SHA256 3c17e82ef4c6b519399e1b86292da008568f4bc5d50c9ebb9d31b96e30ed8c8e. Repeats preserved in build-mac/upstream-fixes-20261027/tests/mexportmask/verified/run-{1,2,3}-console_results.bin.",
+ "xtr": "44fde08477a89499f38f097e00d6942db36caa50",
+ "results": "7a464de480b4e118063c9fc4937aa70c083602de"
+}
