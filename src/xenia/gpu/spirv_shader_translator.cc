@@ -368,6 +368,7 @@ void SpirvShaderTranslator::Reset() {
   main_interpolators_unmodified_ = 0;
   var_main_interpolator_guest_center_deltas_.fill(spv::NoResult);
   var_main_memexport_address_ = spv::NoResult;
+  var_main_memexport_allocation_size_ = spv::NoResult;
   for (size_t memexport_eM_index = 0;
        memexport_eM_index < xe::countof(var_main_memexport_data_);
        ++memexport_eM_index) {
@@ -1032,6 +1033,9 @@ void SpirvShaderTranslator::StartTranslation() {
       }
     }
     if (memexport_used) {
+      var_main_memexport_allocation_size_ = builder_->createVariable(
+          spv::NoPrecision, spv::StorageClassFunction, type_uint_,
+          "xe_var_memexport_allocation_size", const_uint_0_);
       var_main_memexport_address_ = builder_->createVariable(
           spv::NoPrecision, spv::StorageClassFunction, type_float4_,
           "xe_var_memexport_address", const_float4_0_);
@@ -2019,6 +2023,8 @@ void SpirvShaderTranslator::ProcessAllocInstruction(
   }
 
   if (start_memexport) {
+    builder_->createStore(builder_->makeUintConstant(instr.count),
+                          var_main_memexport_allocation_size_);
     // Initialize eA to an invalid address.
     builder_->createStore(const_float4_0_, var_main_memexport_address_);
   }
@@ -2086,6 +2092,9 @@ void SpirvShaderTranslator::ResetUcodeInvocationStateInMain() {
   builder_->createStore(const_float3_0_, var_main_tfetch_gradients_h_);
   builder_->createStore(const_float3_0_, var_main_tfetch_gradients_v_);
 
+  if (var_main_memexport_allocation_size_ != spv::NoResult) {
+    builder_->createStore(const_uint_0_, var_main_memexport_allocation_size_);
+  }
   if (var_main_memexport_address_ != spv::NoResult) {
     builder_->createStore(const_float4_0_, var_main_memexport_address_);
   }

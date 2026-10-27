@@ -962,6 +962,9 @@ class Shader {
     return cf_memexport_info_;
   }
 
+  // Bitmask of raw memory ALLOC sizes encountered during analysis.
+  uint8_t memexport_allocation_sizes() const { return memexport_allocation_sizes_; }
+
   uint8_t memexport_eM_written() const { return memexport_eM_written_; }
   uint8_t memexport_eM_potentially_written_before_end() const {
     return memexport_eM_potentially_written_before_end_;
@@ -1245,6 +1248,7 @@ class Shader {
   std::vector<ControlFlowMemExportInfo> cf_memexport_info_;
   // Which memexport elements (eM#) are written for any memexport in the shader.
   uint8_t memexport_eM_written_ = 0;
+  uint8_t memexport_allocation_sizes_ = 0;
   // ControlFlowMemExportInfo::eM_potentially_written_before equivalent for the
   // end of the shader, for the last memory export (or exports if the end has
   // multiple predecessor chains exporting to memory).

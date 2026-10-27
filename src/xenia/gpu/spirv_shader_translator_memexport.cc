@@ -911,32 +911,19 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
       builder_->createCompositeExtract(eA_vector, type_uint_, 1), const_uint_0_,
       builder_->makeUintConstant(23));
 
-  // Check how many elements starting from eM0 are within the bounds of the
-  // stream, and from the eM# that were written, exclude the out-of-bounds ones.
-  // The index can't be negative, and the index and the count are limited to 23
-  // bits, so it's safe to use 32-bit signed subtraction and clamping to get the
-  // remaining eM# count.
-  spv::Id eM_indices_to_store = builder_->createTriOp(
+  // The stream count validates the base index, not each eM offset. Xbox
+  // exports all written elements when eM0 is in range, including elements
+  // beyond the count (verified with a five-register memory allocation).
+  spv::Id stream_count = builder_->createTriOp(
       spv::OpBitFieldUExtract, type_uint_,
+      builder_->createCompositeExtract(eA_vector, type_uint_, 3), const_uint_0_,
+      builder_->makeUintConstant(23));
+  spv::Id eM_indices_to_store = builder_->createTriOp(
+      spv::OpSelect, type_uint_,
+      builder_->createBinOp(spv::OpULessThan, type_bool_, eM0_index,
+                            stream_count),
       builder_->createLoad(var_main_memexport_data_written_, spv::NoPrecision),
-      const_uint_0_,
-      builder_->createUnaryOp(
-          spv::OpBitcast, type_uint_,
-          builder_->createTriBuiltinCall(
-              type_int_, ext_inst_glsl_std_450_, GLSLstd450SClamp,
-              builder_->createBinOp(
-                  spv::OpISub, type_int_,
-                  builder_->createUnaryOp(
-                      spv::OpBitcast, type_int_,
-                      builder_->createTriOp(spv::OpBitFieldUExtract, type_uint_,
-                                            builder_->createCompositeExtract(
-                                                eA_vector, type_uint_, 3),
-                                            const_uint_0_,
-                                            builder_->makeUintConstant(23))),
-                  builder_->createUnaryOp(spv::OpBitcast, type_int_,
-                                          eM0_index)),
-              const_int_0_,
-              builder_->makeIntConstant(ucode::kMaxMemExportElementCount))));
+      const_uint_0_);
 
   // Get the eM0 address in bytes.
   // Left-shift the stream base address by 2 to both convert it from dwords to
@@ -954,6 +941,31 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
           builder_->createBinOp(spv::OpShiftLeftLogical, type_uint_, eM0_index,
                                 element_bytes_log2)),
       builder_->makeUintConstant(0x1FFFFFFF));
+
+  // Raw memory ALLOC sizes 0 and 1 suppress carry across the physical
+  // four-element window. Larger allocations use linear element addresses.
+  spv::Id wrap_elements = builder_->createBinOp(
+      spv::OpULessThanEqual, type_bool_,
+      builder_->createLoad(var_main_memexport_allocation_size_, spv::NoPrecision),
+      builder_->makeUintConstant(1));
+  auto element_address = [&](spv::Id base, uint32_t index,
+                             uint32_t element_units) -> spv::Id {
+    if (!index) {
+      return base;
+    }
+    spv::Id linear = builder_->createBinOp(
+        spv::OpIAdd, type_uint_, base,
+        builder_->makeUintConstant(index * element_units));
+    uint32_t window_mask = 4 * element_units - 1;
+    spv::Id wrapped = builder_->createBinOp(
+        spv::OpBitwiseOr, type_uint_,
+        builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, base,
+                              builder_->makeUintConstant(~window_mask)),
+        builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, linear,
+                              builder_->makeUintConstant(window_mask)));
+    return builder_->createTriOp(spv::OpSelect, type_uint_, wrap_elements,
+                                 wrapped, linear);
+  };
 
   // Store based on the element size.
   auto store_needed_eM = [&](std::function<void(uint32_t eM_index)> fn) {
@@ -976,10 +988,7 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
   {
     store_needed_eM([&](uint32_t eM_index) {
       spv::Id element_address_bytes =
-          eM_index != 0 ? builder_->createBinOp(
-                              spv::OpIAdd, type_uint_, eM0_address_bytes,
-                              builder_->makeUintConstant(eM_index))
-                        : eM0_address_bytes;
+          element_address(eM0_address_bytes, eM_index, 1);
       // replace_shift = 8 * (element_address_bytes & 3)
       spv::Id replace_shift = builder_->createQuadOp(
           spv::OpBitFieldInsert, type_uint_, const_uint_0_,
@@ -1005,10 +1014,7 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
         spv::OpShiftRightLogical, type_uint_, eM0_address_bytes, const_uint_1);
     store_needed_eM([&](uint32_t eM_index) {
       spv::Id element_address_words =
-          eM_index != 0 ? builder_->createBinOp(
-                              spv::OpIAdd, type_uint_, eM0_address_words,
-                              builder_->makeUintConstant(eM_index))
-                        : eM0_address_words;
+          element_address(eM0_address_words, eM_index, 1);
       // replace_shift = 16 * (element_address_words & 1)
       spv::Id replace_shift = builder_->createQuadOp(
           spv::OpBitFieldInsert, type_uint_, const_uint_0_,
@@ -1036,10 +1042,7 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
           builder_->createCompositeExtract(eM_packed[eM_index], type_uint_, 0),
           builder_->createUnaryOp(
               spv::OpBitcast, type_int_,
-              eM_index != 0 ? builder_->createBinOp(
-                                  spv::OpIAdd, type_uint_, eM0_address_dwords,
-                                  builder_->makeUintConstant(eM_index))
-                            : eM0_address_dwords));
+              element_address(eM0_address_dwords, eM_index, 1)));
     });
   }
   element_size_switch.makeBeginCase(3);
@@ -1050,10 +1053,7 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
       spv::Id element_value = eM_packed[eM_index];
       spv::Id element_address_dwords_int = builder_->createUnaryOp(
           spv::OpBitcast, type_int_,
-          eM_index != 0 ? builder_->createBinOp(
-                              spv::OpIAdd, type_uint_, eM0_address_dwords,
-                              builder_->makeUintConstant(2 * eM_index))
-                        : eM0_address_dwords);
+          element_address(eM0_address_dwords, eM_index, 2));
       StoreUint32ToSharedMemory(
           builder_->createCompositeExtract(element_value, type_uint_, 0),
           element_address_dwords_int);
@@ -1072,10 +1072,7 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
       spv::Id element_value = eM_packed[eM_index];
       spv::Id element_address_dwords_int = builder_->createUnaryOp(
           spv::OpBitcast, type_int_,
-          eM_index != 0 ? builder_->createBinOp(
-                              spv::OpIAdd, type_uint_, eM0_address_dwords,
-                              builder_->makeUintConstant(4 * eM_index))
-                        : eM0_address_dwords);
+          element_address(eM0_address_dwords, eM_index, 4));
       StoreUint32ToSharedMemory(
           builder_->createCompositeExtract(element_value, type_uint_, 0),
           element_address_dwords_int);

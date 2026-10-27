@@ -1591,6 +1591,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
   // Memory export variables are created only when needed.
   // float4.
   spv::Id var_main_memexport_address_;
+  spv::Id var_main_memexport_allocation_size_;
   // Each is float4.
   spv::Id var_main_memexport_data_[ucode::kMaxMemExportElementCount];
   // Bit field of which eM# elements have been written so far by the invocation

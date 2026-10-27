@@ -1164,16 +1164,17 @@ bool GetVertexIndexedMemExportElements(
   if (index_min > index_max) {
     return false;
   }
-  // The shader stores eM# to element index + #, for elements from 0 to below
-  // the count.
+  // The count validates the base index only. All written eM offsets may
+  // extend beyond it, so clamp the base range before adding those offsets.
   int64_t element_offset = stream.dword_1 & 0x7FFFFF;
   int64_t first = std::max(index_min + element_offset, int64_t(0));
-  int64_t end =
-      std::min(index_max + element_offset +
-                   (32 - xe::lzcnt(uint32_t(shader.memexport_eM_written()))),
-               int64_t(stream.index_count));
-  if (first >= end) {
+  int64_t last =
+      std::min(index_max + element_offset, int64_t(stream.index_count) - 1);
+  int64_t end;
+  if (first > last) {
     first = end = 0;
+  } else {
+    end = last + (32 - xe::lzcnt(uint32_t(shader.memexport_eM_written())));
   }
   first_out = uint32_t(first);
   end_out = uint32_t(end);
@@ -1213,8 +1214,10 @@ void AddMemExportRanges(const RegisterFile& regs, const Shader& shader,
       // format, the draw can still be performed.
       continue;
     }
+    // The last valid base index can still export the highest written eM.
+    uint32_t last_eM = 31 - xe::lzcnt(uint32_t(shader.memexport_eM_written()));
     uint32_t stream_size_bytes =
-        stream.index_count * (format_info.bits_per_pixel >> 3);
+        (stream.index_count + last_eM) * (format_info.bits_per_pixel >> 3);
     // Mask to physical like the shader - the guest may use a mirror window.
     uint32_t stream_base_address_dwords =
         xenos::CpuToGpu(uint32_t(stream.base_address) << 2) >> 2;
@@ -1229,10 +1232,20 @@ void AddMemExportRanges(const RegisterFile& regs, const Shader& shader,
                               first_element * element_size_bytes;
         uint32_t end_byte = (stream_base_address_dwords << 2) +
                             end_element * element_size_bytes;
+        if (shader.memexport_allocation_sizes() & 0b11) {
+          first_byte &= ~(4 * element_size_bytes - 1);
+        }
         ranges_out.emplace_back(first_byte >> 2,
                                 end_byte - (first_byte & ~uint32_t(3)));
       }
       continue;
+    }
+    if (shader.memexport_allocation_sizes() & 0b11) {
+      // Small memory allocations may wrap into the physical window prefix.
+      uint32_t prefix_dwords = stream_base_address_dwords &
+                               ((format_info.bits_per_pixel >> 3) - 1);
+      stream_base_address_dwords -= prefix_dwords;
+      stream_size_bytes += prefix_dwords << 2;
     }
     // Try to reduce the number of shared memory operations when writing
     // different elements into the same buffer through different exports

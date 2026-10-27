@@ -183,6 +183,9 @@ void Shader::AnalyzeUcode(StringBuffer& ucode_disasm_buffer) {
           ParsedAllocInstruction instr;
           ParseControlFlowAlloc(cf.alloc, cf_index,
                                 type() == xenos::ShaderType::kVertex, instr);
+          if (instr.type == ucode::AllocType::kMemory) {
+            memexport_allocation_sizes_ |= uint8_t(1u << instr.count);
+          }
           instr.Disassemble(&ucode_disasm_buffer);
         } break;
         case ControlFlowOpcode::kMarkVsFetchDone:
