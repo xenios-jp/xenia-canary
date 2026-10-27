@@ -236,13 +236,13 @@ class D3D12TextureCache final : public TextureCache {
       {DXGI_FORMAT_B5G6R5_UNORM, DXGI_FORMAT_B5G6R5_UNORM,
        kLoadShaderIndexR5G6B5ToB5G6R5, DXGI_FORMAT_UNKNOWN,
        kLoadShaderIndexUnknown, false, DXGI_FORMAT_UNKNOWN,
-       kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGBB},
+       kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGBR},
       // k_6_5_5
       // On the host, green bits in blue, blue bits in green.
       {DXGI_FORMAT_B5G6R5_UNORM, DXGI_FORMAT_B5G6R5_UNORM,
        kLoadShaderIndexR5G5B6ToB5G6R5WithRBGASwizzle, DXGI_FORMAT_UNKNOWN,
        kLoadShaderIndexUnknown, false, DXGI_FORMAT_UNKNOWN,
-       kLoadShaderIndexUnknown, XE_GPU_MAKE_TEXTURE_SWIZZLE(R, B, G, G)},
+       kLoadShaderIndexUnknown, XE_GPU_MAKE_TEXTURE_SWIZZLE(R, B, G, R)},
       // k_8_8_8_8
       {DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM,
        kLoadShaderIndex32bpb, DXGI_FORMAT_R8G8B8A8_SNORM,
@@ -267,7 +267,7 @@ class D3D12TextureCache final : public TextureCache {
       {DXGI_FORMAT_R8G8_TYPELESS, DXGI_FORMAT_R8G8_UNORM, kLoadShaderIndex16bpb,
        DXGI_FORMAT_R8G8_SNORM, kLoadShaderIndexUnknown, false,
        DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown,
-       xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
+       xenos::XE_GPU_TEXTURE_SWIZZLE_RGRG},
       // k_Cr_Y1_Cb_Y0_REP
       // Red and blue swapped in the load shader for simplicity.
       // TODO(Triang3l): The DXGI_FORMAT_R8G8B8A8_U/SNORM conversion is
@@ -312,12 +312,12 @@ class D3D12TextureCache final : public TextureCache {
       {DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_UNORM,
        kLoadShaderIndexR11G11B10ToRGBA16, DXGI_FORMAT_R16G16B16A16_SNORM,
        kLoadShaderIndexR11G11B10ToRGBA16SNorm, false, DXGI_FORMAT_UNKNOWN,
-       kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGBB},
+       kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGBR},
       // k_11_11_10
       {DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_UNORM,
        kLoadShaderIndexR10G11B11ToRGBA16, DXGI_FORMAT_R16G16B16A16_SNORM,
        kLoadShaderIndexR10G11B11ToRGBA16SNorm, false, DXGI_FORMAT_UNKNOWN,
-       kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGBB},
+       kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGBR},
       // k_DXT1
       {DXGI_FORMAT_BC1_UNORM, DXGI_FORMAT_BC1_UNORM, kLoadShaderIndex64bpb,
        DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true,
@@ -360,7 +360,7 @@ class D3D12TextureCache final : public TextureCache {
       {DXGI_FORMAT_R16G16_TYPELESS, DXGI_FORMAT_R16G16_UNORM,
        kLoadShaderIndex32bpb, DXGI_FORMAT_R16G16_SNORM, kLoadShaderIndexUnknown,
        false, DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown,
-       xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
+       xenos::XE_GPU_TEXTURE_SWIZZLE_RGRG},
       // k_16_16_16_16
       {DXGI_FORMAT_R16G16B16A16_TYPELESS, DXGI_FORMAT_R16G16B16A16_UNORM,
        kLoadShaderIndex64bpb, DXGI_FORMAT_R16G16B16A16_SNORM,
@@ -375,7 +375,7 @@ class D3D12TextureCache final : public TextureCache {
       {DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16_FLOAT,
        kLoadShaderIndex32bpb, DXGI_FORMAT_R16G16_FLOAT, kLoadShaderIndexUnknown,
        false, DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown,
-       xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
+       xenos::XE_GPU_TEXTURE_SWIZZLE_RGRG},
       // k_16_16_16_16_EXPAND
       {DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
        kLoadShaderIndex64bpb, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -390,7 +390,7 @@ class D3D12TextureCache final : public TextureCache {
       {DXGI_FORMAT_R16G16_FLOAT, DXGI_FORMAT_R16G16_FLOAT,
        kLoadShaderIndex32bpb, DXGI_FORMAT_R16G16_FLOAT, kLoadShaderIndexUnknown,
        false, DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown,
-       xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
+       xenos::XE_GPU_TEXTURE_SWIZZLE_RGRG},
       // k_16_16_16_16_FLOAT
       {DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT,
        kLoadShaderIndex64bpb, DXGI_FORMAT_R16G16B16A16_FLOAT,
@@ -417,7 +417,7 @@ class D3D12TextureCache final : public TextureCache {
       {DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R32G32_FLOAT,
        kLoadShaderIndex64bpb, DXGI_FORMAT_R32G32_FLOAT, kLoadShaderIndexUnknown,
        false, DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown,
-       xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
+       xenos::XE_GPU_TEXTURE_SWIZZLE_RGRG},
       // k_32_32_32_32_FLOAT
       {DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R32G32B32A32_FLOAT,
        kLoadShaderIndex128bpb, DXGI_FORMAT_R32G32B32A32_FLOAT,
@@ -467,7 +467,7 @@ class D3D12TextureCache final : public TextureCache {
       {DXGI_FORMAT_BC5_UNORM, DXGI_FORMAT_BC5_UNORM, kLoadShaderIndex128bpb,
        DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, true,
        DXGI_FORMAT_R8G8_UNORM, kLoadShaderIndexDXNToRG8,
-       xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
+       xenos::XE_GPU_TEXTURE_SWIZZLE_RGRG},
       // k_8_8_8_8_AS_16_16_16_16
       {DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R8G8B8A8_UNORM,
        kLoadShaderIndex32bpb, DXGI_FORMAT_R8G8B8A8_SNORM,
@@ -520,7 +520,7 @@ class D3D12TextureCache final : public TextureCache {
       // k_CTX1
       {DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8G8_UNORM, kLoadShaderIndexCTX1,
        DXGI_FORMAT_UNKNOWN, kLoadShaderIndexUnknown, false, DXGI_FORMAT_UNKNOWN,
-       kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG},
+       kLoadShaderIndexUnknown, xenos::XE_GPU_TEXTURE_SWIZZLE_RGRG},
       // k_DXT3A_AS_1_1_1_1
       {DXGI_FORMAT_B4G4R4A4_UNORM, DXGI_FORMAT_B4G4R4A4_UNORM,
        kLoadShaderIndexDXT3AAs1111ToBGRA4, DXGI_FORMAT_UNKNOWN,

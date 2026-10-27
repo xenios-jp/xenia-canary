@@ -3341,17 +3341,18 @@ uint32_t MetalTextureCache::GetHostFormatSwizzle(TextureKey key) const {
     case xenos::TextureFormat::k_16_16_FLOAT:
     case xenos::TextureFormat::k_DXN:
     case xenos::TextureFormat::k_32_32_FLOAT:
-      return xenos::XE_GPU_TEXTURE_SWIZZLE_RGGG;
+    case xenos::TextureFormat::k_CTX1:
+      return xenos::XE_GPU_TEXTURE_SWIZZLE_RGRG;
 
     case xenos::TextureFormat::k_5_6_5:
     case xenos::TextureFormat::k_10_11_11:
     case xenos::TextureFormat::k_11_11_10:
-      return xenos::XE_GPU_TEXTURE_SWIZZLE_RGBB;
+      return xenos::XE_GPU_TEXTURE_SWIZZLE_RGBR;
 
     case xenos::TextureFormat::k_6_5_5:
       // The load shader places guest green in host blue and guest blue in
       // host green.
-      return XE_GPU_MAKE_TEXTURE_SWIZZLE(R, B, G, G);
+      return XE_GPU_MAKE_TEXTURE_SWIZZLE(R, B, G, R);
 
     case xenos::TextureFormat::k_4_4_4_4:
     case xenos::TextureFormat::k_DXT3A_AS_1_1_1_1:
