@@ -4344,16 +4344,17 @@ void SpirvShaderTranslator::FSI_AlphaToMask() {
     spv::Id frag_y =
         builder_->createUnaryOp(spv::OpConvertFToU, type_uint_, frag_y_float);
 
-    // Calculate dithering offset: (Y & 1) | ((X & 1) << 1)
-    spv::Id y_bit = builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, frag_y,
-                                          builder_->makeUintConstant(1));
+    // Calculate dithering offset: (X & 1) | ((Y & 1) << 1), as the console
+    // indexes it.
     spv::Id x_bit = builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, frag_x,
                                           builder_->makeUintConstant(1));
-    spv::Id x_bit_shifted =
-        builder_->createBinOp(spv::OpShiftLeftLogical, type_uint_, x_bit,
+    spv::Id y_bit = builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, frag_y,
+                                          builder_->makeUintConstant(1));
+    spv::Id y_bit_shifted =
+        builder_->createBinOp(spv::OpShiftLeftLogical, type_uint_, y_bit,
                               builder_->makeUintConstant(1));
     spv::Id offset_index = builder_->createBinOp(spv::OpBitwiseOr, type_uint_,
-                                                 y_bit, x_bit_shifted);
+                                                 x_bit, y_bit_shifted);
 
     // Extract 2-bit offset from alpha_to_mask constant
     spv::Id bit_position =
@@ -4382,11 +4383,11 @@ void SpirvShaderTranslator::FSI_AlphaToMask() {
     spv::Id coverage = main_fsi_sample_mask_;
     switch (FSI_GetMsaaSamples()) {
       case xenos::MsaaSamples::k4X:
-        FSI_AlphaToMaskSample(false, 0, 0.75f, threshold_offset, 1.0f / 16.0f,
+        FSI_AlphaToMaskSample(false, 0, 0.25f, threshold_offset, 1.0f / 16.0f,
                               alpha, coverage);
-        FSI_AlphaToMaskSample(false, 1, 0.25f, threshold_offset, 1.0f / 16.0f,
+        FSI_AlphaToMaskSample(false, 1, 0.5f, threshold_offset, 1.0f / 16.0f,
                               alpha, coverage);
-        FSI_AlphaToMaskSample(false, 2, 0.5f, threshold_offset, 1.0f / 16.0f,
+        FSI_AlphaToMaskSample(false, 2, 0.75f, threshold_offset, 1.0f / 16.0f,
                               alpha, coverage);
         FSI_AlphaToMaskSample(false, 3, 1.0f, threshold_offset, 1.0f / 16.0f,
                               alpha, coverage);
@@ -4460,7 +4461,7 @@ void SpirvShaderTranslator::FSI_AlphaToMask() {
   builder_->setBuildPoint(&block_alpha_to_mask_enabled);
 
   // Extract dithering threshold offset from fragment position.
-  // offset_index = (Y & 1) | ((X & 1) << 1)
+  // offset_index = (X & 1) | ((Y & 1) << 1), as the console indexes it
   // offset = (alpha_to_mask >> (offset_index * 2)) & 0b11
   spv::Id frag_coord =
       builder_->createLoad(input_fragment_coordinates_, spv::NoPrecision);
@@ -4476,20 +4477,20 @@ void SpirvShaderTranslator::FSI_AlphaToMask() {
   spv::Id frag_y =
       builder_->createUnaryOp(spv::OpConvertFToU, type_uint_, frag_y_float);
 
-  // Y & 1
-  spv::Id y_bit = builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, frag_y,
-                                        builder_->makeUintConstant(1));
-
-  // (X & 1) << 1
+  // X & 1
   spv::Id x_bit = builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, frag_x,
                                         builder_->makeUintConstant(1));
-  spv::Id x_bit_shifted =
-      builder_->createBinOp(spv::OpShiftLeftLogical, type_uint_, x_bit,
+
+  // (Y & 1) << 1
+  spv::Id y_bit = builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, frag_y,
+                                        builder_->makeUintConstant(1));
+  spv::Id y_bit_shifted =
+      builder_->createBinOp(spv::OpShiftLeftLogical, type_uint_, y_bit,
                             builder_->makeUintConstant(1));
 
-  // offset_index = y_bit | x_bit_shifted
+  // offset_index = x_bit | y_bit_shifted
   spv::Id offset_index =
-      builder_->createBinOp(spv::OpBitwiseOr, type_uint_, y_bit, x_bit_shifted);
+      builder_->createBinOp(spv::OpBitwiseOr, type_uint_, x_bit, y_bit_shifted);
 
   // bit_position = offset_index * 2
   spv::Id bit_position =
@@ -4554,11 +4555,11 @@ void SpirvShaderTranslator::FSI_AlphaToMask() {
   // 4x MSAA
   builder_->setBuildPoint(&block_4x_msaa);
   spv::Id coverage_4x = spv::NoResult;
-  FSI_AlphaToMaskSample(true, 0, 0.75f, threshold_offset, 1.0f / 16.0f, alpha,
+  FSI_AlphaToMaskSample(true, 0, 0.25f, threshold_offset, 1.0f / 16.0f, alpha,
                         coverage_4x);
-  FSI_AlphaToMaskSample(false, 1, 0.25f, threshold_offset, 1.0f / 16.0f, alpha,
+  FSI_AlphaToMaskSample(false, 1, 0.5f, threshold_offset, 1.0f / 16.0f, alpha,
                         coverage_4x);
-  FSI_AlphaToMaskSample(false, 2, 0.5f, threshold_offset, 1.0f / 16.0f, alpha,
+  FSI_AlphaToMaskSample(false, 2, 0.75f, threshold_offset, 1.0f / 16.0f, alpha,
                         coverage_4x);
   FSI_AlphaToMaskSample(false, 3, 1.0f, threshold_offset, 1.0f / 16.0f, alpha,
                         coverage_4x);
