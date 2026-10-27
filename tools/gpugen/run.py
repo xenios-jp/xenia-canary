@@ -16,7 +16,8 @@ command processor microcode.
 
 With GPUGEN_AURORA set to ftp://USER:PASSWORD@HOST/FOLDER, console runs
 through Aurora's FTP instead, with no XBDM: it puts each OUTDIR's XEX in
-FOLDER as <results>.xex, has Aurora launch the first, and collects every
+FOLDER as <results>.xex (and a play.py build's memory file, unless it is
+there from an earlier run), has Aurora launch the first, and collects every
 <results>.bin once Aurora is back. Several OUTDIRs are a chain built with
 --results and --next, each launching the next; a run that stopped short
 rebooted the console, so the chain ends there.
@@ -24,7 +25,11 @@ rebooted the console, so the chain ends there.
 replay plays OUTDIR/gpugen.xtr, the stream without the executor, through a
 backend's trace dump (TRACE_DUMP, or xenia-gpu-<gpu>-trace-dump beside the
 Release build), with no window, and decodes the outputs it leaves in memory
-like a Xenia run's.
+like a Xenia run's. It records which trace dump ran, with its arguments, in
+OUTDIR/xenia_provenance.json. A play build's stages replay from the eDRAM
+the console had before the trace when its run read it out (--edram, by
+default OUTDIR/console_edram_before.bin), and from eDRAM all zeros and all
+ones, whose disagreement marks the pixels that show it.
 
 expect keeps a console run of OUTDIR as the suite's expected results, the
 ones checked in as src/xenia/gpu/testing/gpu__gen_<suite>.json: the run's
@@ -43,6 +48,7 @@ import json
 import lzma
 import os
 import re
+import socket
 import struct
 import subprocess
 import sys
@@ -53,6 +59,7 @@ import urllib.parse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import gpugen  # noqa: E402
+import play  # noqa: E402
 
 # xamgen's run.py, by path since this file shares its name.
 _spec = importlib.util.spec_from_file_location(
@@ -69,6 +76,12 @@ REPLAY_ARGS = ['--async_shader_compilation=false']
 AURORA_CACHE = ('/HddX', '/Hdd1/Cache')
 # A reboot, and Aurora starting and bringing its FTP back up.
 AURORA_BOOT_SECONDS = 300
+# FTP transfers in big blocks: ftplib's 8 KiB ones are slow with Aurora.
+AURORA_BLOCK_BYTES = 1 << 20
+# A play title answering no status probe for this long while it runs its
+# segments has frozen the console. Allocating the block keeps the network
+# quiet for longer.
+STATUS_SILENT_SECONDS = 5
 
 
 def decode_into(outdir, where, results_path):
@@ -76,6 +89,11 @@ def decode_into(outdir, where, results_path):
         meta = json.load(f)
     with open(results_path, 'rb') as f:
         decoded = gpugen.decode(meta, f.read())
+    # Only a console's run reads its eDRAM out; a replay's holds the eDRAM
+    # it started from, if it was seeded.
+    if 'edram' in meta and where != 'console' and not \
+            seed_of(outdir, where):
+        decoded.get('raw', {}).pop(meta['edram']['name'], None)
     gpugen.save_raw(decoded, outdir, where)
     out = os.path.join(outdir, f'{where}_results.json')
     with open(out, 'w') as f:
@@ -161,13 +179,94 @@ def trace_dump(gpu):
     return os.path.join(os.path.dirname(xamgen_run.default_xenia()), name)
 
 
-def run_replay(outdir, gpu, timeout, extra_args):
+def record_provenance(outdir, dump, args, seed=None):
+    """OUTDIR/xenia_provenance.json: the trace dump a replay ran (its hash,
+    and a wrapper script's text, which names the binary and its cvars), its
+    arguments, the git tree it lies in as it was at replay time, which the
+    binary may predate, and `seed`, the eDRAM dump a play build's replay
+    started from."""
+    real = os.path.realpath(dump)
+    with open(real, 'rb') as f:
+        data = f.read()
+    out = {'trace_dump': real, 'sha256': hashlib.sha256(data).hexdigest(),
+           'mtime': time.strftime('%Y-%m-%dT%H:%M:%S%z',
+                                  time.localtime(os.path.getmtime(real))),
+           'args': list(args),
+           'replayed': time.strftime('%Y-%m-%dT%H:%M:%S%z'),
+           'tree_at_replay': None, 'edram_seed': seed}
+    if data.startswith(b'#!'):
+        out['wrapper'] = data.decode(errors='replace')
+
+    def git(*command):
+        return subprocess.run(['git', '-C', os.path.dirname(real), *command],
+                              capture_output=True, text=True, timeout=30,
+                              check=True).stdout.strip()
+    try:
+        out['tree_at_replay'] = {
+            'path': git('rev-parse', '--show-toplevel'),
+            'commit': git('rev-parse', 'HEAD'),
+            'committed': git('log', '-1', '--format=%cI'),
+            'dirty': bool(git('status', '--porcelain',
+                              '--untracked-files=no'))}
+    except (OSError, subprocess.SubprocessError):
+        pass
+    with open(os.path.join(outdir, 'xenia_provenance.json'), 'w') as f:
+        json.dump(out, f, indent=1)
+
+
+def read_edram(path, meta):
+    """The eDRAM dump in `path`: the dump itself (a console run's
+    console_edram_before.bin) or a results file holding it, xz-compressed
+    or not, of this build."""
+    with open(path, 'rb') as f:
+        data = f.read()
+    if path.endswith('.xz'):
+        data = lzma.decompress(data)
+    if data[:4] == struct.pack('>I', gpugen.RESULTS_MAGIC):
+        data = gpugen.decode(meta, data).get('raw', {}).get(
+            meta['edram']['name'])
+        if data is None:
+            sys.exit(f'replay: {path} has no eDRAM dump')
+    if len(data) != play.EDRAM_BYTES:
+        sys.exit(f'replay: {path} is no eDRAM dump')
+    return data
+
+
+def seed_of(outdir, where='xenia'):
+    """The SHA-1 of the eDRAM dump OUTDIR's replay started from, as its
+    provenance records, or None."""
+    if where != 'xenia':
+        return None
+    try:
+        with open(os.path.join(outdir, 'xenia_provenance.json')) as f:
+            return (json.load(f).get('edram_seed') or {}).get('sha1')
+    except OSError:
+        return None
+
+
+def run_replay(outdir, gpu, timeout, extra_args, edram=None):
     outdir = os.path.abspath(outdir)
     dump = trace_dump(gpu)
     if not os.path.exists(dump):
         sys.exit(f'replay: no {dump}, set TRACE_DUMP to the one to run')
     with open(os.path.join(outdir, 'gpugen.json')) as f:
         meta = json.load(f)
+    seed = seed_data = None
+    if 'edram' in meta:
+        if edram is None:
+            edram = os.path.join(outdir,
+                                 f'console_{meta["edram"]["name"]}.bin')
+            edram = edram if os.path.exists(edram) else None
+        if edram is not None:
+            seed_data = read_edram(os.path.abspath(edram), meta)
+            seed = {'source': os.path.abspath(edram),
+                    'sha1': hashlib.sha1(seed_data).hexdigest()}
+    elif edram is not None:
+        sys.exit('replay: this build reads no eDRAM out')
+    record_provenance(outdir, dump, REPLAY_ARGS + list(extra_args), seed)
+    if 'play' in meta:
+        return run_play_replay(outdir, dump, meta, timeout, extra_args,
+                               seed_data)
     memory = os.path.join(outdir, 'gpugen_mem.bin')
     if os.path.exists(memory):
         os.remove(memory)
@@ -192,6 +291,82 @@ def run_replay(outdir, gpu, timeout, extra_args):
     with open(copy, 'wb') as f:
         f.write(header + bytes(0x20 - len(header)) + body)
     return decode_into(outdir, 'xenia', copy)
+
+
+def replay_stage(dump, trace, stage, directory, timeout, extra_args):
+    """The memory a stage's resolve wrote, from the trace replayed up to
+    its command."""
+    os.makedirs(directory, exist_ok=True)
+    for name in os.listdir(directory):
+        os.remove(os.path.join(directory, name))
+    log = os.path.join(directory, 'replay.log')
+    subprocess.run(
+        [dump, f'--log_file={xamgen_run.host_path(log, dump)}',
+         f'--trace_dump_path={xamgen_run.host_path(directory, dump)}',
+         *REPLAY_ARGS, '--trace_dump_edram_frame=0',
+         f'--trace_dump_stop_command={stage["command"]}',
+         '--trace_dump_memory_frame=0',
+         f'--trace_dump_memory_base={stage["base"]}',
+         f'--trace_dump_memory_size={stage["size"]}', *extra_args,
+         xamgen_run.host_path(trace, dump)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+    # Stopped before the frame's end, it writes no image, only the memory.
+    memory = [name for name in os.listdir(directory)
+              if name.endswith('_mem.bin')]
+    if len(memory) != 1:
+        sys.exit(f'replay: no memory written for command '
+                 f'{stage["command"]}, see {log}')
+    with open(os.path.join(directory, memory[0]), 'rb') as f:
+        data = f.read()
+    if len(data) != stage['size']:
+        sys.exit(f'replay: {len(data)} bytes for command {stage["command"]}, '
+                 f'not {stage["size"]}')
+    return data
+
+
+def run_play_replay(outdir, dump, meta, timeout, extra_args, edram=None):
+    """A play build's stages, each from the trace replayed up to its
+    command, as xenia_results.bin, starting from `edram`, the console's
+    eDRAM dump, if given; and as xenia_edram00_results.bin and
+    xenia_edramff_results.bin, from replays starting from eDRAM all zeros
+    and all ones, which tell the pixels a stage shows of eDRAM from before
+    the trace. Each holds the eDRAM it started from where the console's run
+    holds its dump, the unseeded replay nothing."""
+    trace = os.path.join(outdir, 'gpugen.xtr')
+    with tempfile.TemporaryDirectory(dir=outdir) as temp:
+        traces = {'xenia': trace}
+        seeds = {}
+        if edram is not None:
+            traces['xenia'] = os.path.join(temp, 'edram.xtr')
+            play.seeded_trace(trace, traces['xenia'],
+                              play.edram_snapshot(edram))
+            seeds['xenia'] = edram
+        for fill in (0x00, 0xFF):
+            where = f'xenia_edram{fill:02x}'
+            traces[where] = os.path.join(temp, f'edram{fill:02x}.xtr')
+            play.seeded_trace(trace, traces[where], fill)
+            seeds[where] = bytes([fill]) * play.EDRAM_BYTES
+        last = meta['tests'][-1]
+        bodies = {where: bytearray(last['offset'] + last['output_bytes'] +
+                                   3 & ~3) for where in traces}
+        if 'edram' in meta:
+            at = meta['edram']['offset']
+            for where, seed in seeds.items():
+                bodies[where][at:at + len(seed)] = seed
+        for test in meta['tests']:
+            for where, path in traces.items():
+                data = replay_stage(dump, path, test['stage'],
+                                    os.path.join(temp, 'stage'), timeout,
+                                    extra_args)
+                bodies[where][test['offset']:test['offset'] + len(data)] = data
+            print(f'replay: {test["name"]}', flush=True)
+    for where, body in bodies.items():
+        header = struct.pack('>IIIiI', gpugen.RESULTS_MAGIC, gpugen.VERSION,
+                             meta['segments'], 0, 0x20 + len(body))
+        with open(os.path.join(outdir, f'{where}_results.bin'), 'wb') as f:
+            f.write(header + bytes(0x20 - len(header)) + body)
+    return decode_into(outdir, 'xenia',
+                       os.path.join(outdir, 'xenia_results.bin'))
 
 
 def run_console(outdir, timeout):
@@ -269,8 +444,8 @@ def run_console(outdir, timeout):
 
 
 def aurora():
-    """A function connecting to Aurora's FTP as GPUGEN_AURORA says, and the
-    folder the XEXes go to."""
+    """A function connecting to Aurora's FTP as GPUGEN_AURORA says, the
+    folder the XEXes go to and the console's host."""
     url = urllib.parse.urlsplit(os.environ['GPUGEN_AURORA'])
     folder = urllib.parse.unquote(url.path).rstrip('/')
     if url.scheme != 'ftp' or not url.hostname or not folder:
@@ -283,7 +458,7 @@ def aurora():
         f.login(urllib.parse.unquote(url.username or ''),
                 urllib.parse.unquote(url.password or ''))
         return f
-    return connect, folder
+    return connect, folder, url.hostname
 
 
 def aurora_files(f, folder):
@@ -294,6 +469,18 @@ def aurora_files(f, folder):
         return {line.split(None, 8)[-1] for line in f.nlst()}
     except ftplib.Error:
         return set()
+
+
+def aurora_put_memory(f, have, path, name):
+    """Puts a play build's memory file in the current folder as NAME, which
+    its SHA-1 names, unless it is there; a whole one, from a rename once it
+    is all there."""
+    if name in have:
+        print(f'console: {name} already there', flush=True)
+        return
+    with open(path, 'rb') as mem:
+        f.storbinary(f'STOR {name}.part', mem, blocksize=AURORA_BLOCK_BYTES)
+    f.rename(f'{name}.part', name)
 
 
 def run_aurora(outdirs):
@@ -311,7 +498,7 @@ def run_aurora(outdirs):
     names = [meta['results'] for meta in metas]
     if len(set(names)) != len(names):
         sys.exit('console: two OUTDIRs write the same results')
-    connect, folder = aurora()
+    connect, folder, host = aurora()
     places = (folder, *AURORA_CACHE)
     with connect() as f:
         for place in places:
@@ -319,10 +506,14 @@ def run_aurora(outdirs):
             for name in names:
                 if f'{name}.bin' in stale:
                     f.delete(f'{name}.bin')
-        f.cwd(folder)
-        for outdir, name in zip(outdirs, names):
+        have = aurora_files(f, folder)
+        for outdir, name, meta in zip(outdirs, names, metas):
             with open(os.path.join(outdir, 'gpugen.xex'), 'rb') as xex:
-                f.storbinary(f'STOR {name}.xex', xex)
+                f.storbinary(f'STOR {name}.xex', xex,
+                             blocksize=AURORA_BLOCK_BYTES)
+            if meta.get('memory'):
+                aurora_put_memory(f, have, os.path.join(outdir, 'gpugen.mem'),
+                                  meta['memory'])
     # For a while after a boot Aurora refuses to launch titles. Its FTP goes
     # away with it, so the connection closes without QUIT.
     for _ in range(30):
@@ -341,8 +532,13 @@ def run_aurora(outdirs):
                 AURORA_BOOT_SECONDS)
     got = {}
     stopped = None
+    status = Status(host) if any('play' in meta for meta in metas) else None
     while len(got) < len(names) and not stopped and time.time() < deadline:
-        time.sleep(5)
+        if status:
+            if status.watch(5):
+                sys.exit(f'console: froze, {status.describe()}')
+        else:
+            time.sleep(5)
         try:
             with connect() as f:
                 for place in places:
@@ -350,7 +546,8 @@ def run_aurora(outdirs):
                     for name in names:
                         if name not in got and f'{name}.bin' in have:
                             data = io.BytesIO()
-                            f.retrbinary(f'RETR {name}.bin', data.write)
+                            f.retrbinary(f'RETR {name}.bin', data.write,
+                                         blocksize=AURORA_BLOCK_BYTES)
                             got[name] = data.getvalue()
         except (OSError, ftplib.Error):
             continue  # down while a title runs
@@ -369,6 +566,51 @@ def run_aurora(outdirs):
         if name == stopped:
             sys.exit(f'console: {name} stopped short and rebooted the '
                      'console, the chain ended there')
+
+
+class Status:
+    """A play title's status thread, probed over UDP: prints its progress as
+    it goes and tells when it stops answering."""
+
+    def __init__(self, host):
+        self.address = (host, gpugen.STATUS_PORT)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket.settimeout(1)
+        self.last = None    # (elapsed, progress, segment, step, error)
+        self.answered = None        # when it last answered
+
+    def describe(self):
+        elapsed, progress, segment, step, error = self.last
+        phase = (gpugen.PROGRESS[progress - 1] if 0 < progress <=
+                 len(gpugen.PROGRESS) else progress)
+        return (f'{elapsed} s in, {phase}, segment {segment} step {step}, '
+                + (f'receive error {error}, ' if error else '') +
+                f'last answer {time.time() - self.answered:.0f} s ago')
+
+    def watch(self, seconds):
+        """Probes for `seconds`; True once a title running its segments has
+        been silent for STATUS_SILENT_SECONDS."""
+        end = time.time() + seconds
+        while time.time() < end:
+            sent = time.time()
+            try:
+                self.socket.sendto(b'gpugen', self.address)
+                reply, _ = self.socket.recvfrom(64)
+            except OSError:
+                reply = b''
+            if len(reply) == gpugen.STATUS_REPLY_BYTES:
+                magic, *last = struct.unpack('>6I', reply)
+                if magic == gpugen.STATUS_MAGIC:
+                    if (self.last is None or last[1:3] != self.last[1:3] or
+                            time.time() - self.answered > 2):
+                        self.last, self.answered = tuple(last), time.time()
+                        print(f'console: {self.describe()}', flush=True)
+                    self.last, self.answered = tuple(last), time.time()
+            elif (self.answered and self.last[1] == gpugen.P_SUBMIT and
+                    time.time() - self.answered > STATUS_SILENT_SECONDS):
+                return True
+            time.sleep(max(0.0, sent + 1 - time.time()))
+        return False
 
 
 def load_words(path):
@@ -458,6 +700,11 @@ def check(expected_path, outdir):
         data = lzma.decompress(f.read())
     if hashlib.sha1(data).hexdigest() != expected['results']:
         sys.exit(f'{results_path(expected_path)}: corrupt')
+    with open(os.path.join(outdir, 'gpugen.json')) as f:
+        meta = json.load(f)
+    if 'play' in meta:
+        check_play(meta, data, outdir)
+        return
     with tempfile.TemporaryDirectory() as temp:
         for name in ('gpugen.json',):
             with open(os.path.join(outdir, name), 'rb') as src, \
@@ -470,6 +717,58 @@ def check(expected_path, outdir):
         _, differ, not_run = compare(
             os.path.join(temp, 'expected_results.json'),
             actual, quiet=True)
+    if differ or not_run:
+        sys.exit(1)
+
+
+def check_play(meta, data, outdir):
+    """Compares a play build's stages, the pixels of each resolve's
+    destination. With the console's eDRAM dump, which the replay must have
+    started from, every pixel; without, leaving out the ones the replays
+    from eDRAM all zeros and all ones disagree on, which show eDRAM from
+    before the trace."""
+    results = {}
+    for where in ('xenia', 'xenia_edram00', 'xenia_edramff'):
+        path = os.path.join(outdir, f'{where}_results.bin')
+        if not os.path.exists(path):
+            sys.exit(f'{outdir}: no {where}_results.bin, replay it first')
+        with open(path, 'rb') as f:
+            results[where] = gpugen.decode(meta, f.read())['raw']
+    expected = gpugen.decode(meta, data).get('raw', {})
+    dump = expected.get(meta['edram']['name']) if 'edram' in meta else None
+    seeded = dump is not None
+    if seeded and not play.replay_seeded(outdir, dump):
+        sys.exit(f'{outdir}: replayed from other eDRAM than the console\'s '
+                 'dump, replay it with --edram of these results')
+    differ = not_run = before = before_same = 0
+    for test in meta['tests']:
+        name = test['name']
+        if name not in expected:
+            not_run += 1
+            print(f'{name}: not run on the console')
+            continue
+        differing, first, undefined, same = play.compare_stage(
+            test['stage'], expected[name], results['xenia'][name],
+            results['xenia_edram00'][name], results['xenia_edramff'][name],
+            mask=not seeded)
+        before += undefined
+        before_same += same
+        note = ('' if not undefined else
+                f', {undefined} from before the trace ({same} same)' if seeded
+                else f', {undefined} undefined')
+        if differing:
+            differ += 1
+            print(f'{name}: {differing} pixels differ, first at {first}'
+                  f'{note}')
+        else:
+            print(f'{name}: same{note}')
+    print(f'{len(meta["tests"]) - differ - not_run} stages same, {differ} '
+          'different' + (f', {not_run} not run' if not_run else ''))
+    if seeded:
+        print(f'{before} pixels show eDRAM from before the trace (the '
+              'eDRAM-00 and -FF replays disagree), compared from the '
+              f'console\'s dump: {before_same} same, '
+              f'{before - before_same} different')
     if differ or not_run:
         sys.exit(1)
 
@@ -489,6 +788,10 @@ def main():
     p.add_argument('--timeout', type=int, default=120)
     p.add_argument('--dump-arg', action='append', default=[],
                    help='extra trace dump argument')
+    p.add_argument('--edram', metavar='FILE',
+                   help='a play build\'s replay starts from the console\'s '
+                   'eDRAM dump in FILE, the dump or results holding it '
+                   '(default OUTDIR/console_edram_before.bin)')
     p = sub.add_parser('console')
     p.add_argument('outdir', nargs='+')
     p.add_argument('--timeout', type=int, default=30,
@@ -508,7 +811,8 @@ def main():
     if args.command == 'xenia':
         run_xenia(args.outdir, args.timeout, args.xenia_arg)
     elif args.command == 'replay':
-        run_replay(args.outdir, args.gpu, args.timeout, args.dump_arg)
+        run_replay(args.outdir, args.gpu, args.timeout, args.dump_arg,
+                   args.edram)
     elif args.command == 'console':
         if 'GPUGEN_AURORA' in os.environ:
             run_aurora(args.outdir)

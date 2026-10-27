@@ -107,3 +107,5 @@ Suites:
   MSAA samples and resolves.
 - `blend_products`: blending on the fixed point formats one product at a time,
   each operand swept or held.
+- `edramraw`: the converting Resolve that reads every EDRAM word back
+  unchanged, for a dump of the whole EDRAM.
