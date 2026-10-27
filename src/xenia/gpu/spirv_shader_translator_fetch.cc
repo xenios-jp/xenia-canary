@@ -1931,6 +1931,46 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
 
         spv::Id lod = TextureFetchLod(instr, fetch_constant_word_4_signed);
 
+        // At an LOD fraction of exactly .5, the console's point mip filter
+        // picks the smaller mip where host samplers pick the larger one, so
+        // give the host the rounded LOD.
+        if (!use_computed_lod &&
+            instr.attributes.mip_filter != xenos::TextureFilter::kLinear &&
+            instr.attributes.mip_filter != xenos::TextureFilter::kBaseMap) {
+          spv::Id lod_rounded = builder_->createUnaryBuiltinCall(
+              type_float_, ext_inst_glsl_std_450_, GLSLstd450Floor,
+              builder_->createNoContractionBinOp(
+                  spv::OpFAdd, type_float_, lod,
+                  builder_->makeFloatConstant(0.5f)));
+          if (instr.attributes.mip_filter ==
+              xenos::TextureFilter::kUseFetchConst) {
+            id_vector_temp_.clear();
+            id_vector_temp_.push_back(const_int_0_);
+            id_vector_temp_.push_back(builder_->makeIntConstant(
+                int((fetch_constant_word_0_index + 3) >> 2)));
+            id_vector_temp_.push_back(builder_->makeIntConstant(
+                int((fetch_constant_word_0_index + 3) & 3)));
+            spv::Id fetch_constant_word_3 = builder_->createLoad(
+                builder_->createAccessChain(spv::StorageClassUniform,
+                                            uniform_fetch_constants_,
+                                            id_vector_temp_),
+                spv::NoPrecision);
+            lod = builder_->createTriOp(
+                spv::OpSelect, type_float_,
+                builder_->createBinOp(
+                    spv::OpIEqual, type_bool_,
+                    builder_->createTriOp(spv::OpBitFieldUExtract, type_uint_,
+                                          fetch_constant_word_3,
+                                          builder_->makeUintConstant(23),
+                                          builder_->makeUintConstant(2)),
+                    builder_->makeUintConstant(
+                        uint32_t(xenos::TextureFilter::kPoint))),
+                lod_rounded, lod);
+          } else {
+            lod = lod_rounded;
+          }
+        }
+
         // Cube and 3D auto-LOD without register gradients use implicit LOD +
         // bias. Explicit cube gradients pick the wrong mip on Vulkan, and
         // explicit 3D gradients of a coordinate that is constant across the
