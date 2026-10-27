@@ -625,8 +625,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3(uint32_t packet) XE_RESTRICT {
       } break;
       case PM4_SET_BIN_MASK: {
         assert_true(count == 2);
-        uint64_t val_hi = reader_.ReadAndSwap<uint32_t>();
+        // The low dword comes first, as the console reads it.
         uint64_t val_lo = reader_.ReadAndSwap<uint32_t>();
+        uint64_t val_hi = reader_.ReadAndSwap<uint32_t>();
         if (COMMAND_PROCESSOR::debug_markers_enabled()) {
           COMMAND_PROCESSOR::InsertDebugMarker("PM4_SET_BIN_MASK: 0x%08X%08X",
                                                uint32_t(val_hi),
@@ -637,8 +638,9 @@ bool COMMAND_PROCESSOR::ExecutePacketType3(uint32_t packet) XE_RESTRICT {
       } break;
       case PM4_SET_BIN_SELECT: {
         assert_true(count == 2);
-        uint64_t val_hi = reader_.ReadAndSwap<uint32_t>();
+        // The low dword comes first, as the console reads it.
         uint64_t val_lo = reader_.ReadAndSwap<uint32_t>();
+        uint64_t val_hi = reader_.ReadAndSwap<uint32_t>();
         if (COMMAND_PROCESSOR::debug_markers_enabled()) {
           COMMAND_PROCESSOR::InsertDebugMarker("PM4_SET_BIN_SELECT: 0x%08X%08X",
                                                uint32_t(val_hi),
@@ -1116,6 +1118,10 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE(
 
   // Writeback initiator.
   COMMAND_PROCESSOR::WriteEventInitiator(event_type);
+  if (event_type == 25) {
+    // SCREEN_EXT_INIT.
+    screen_extents_drawn_ = false;
+  }
   if (count == 1) {
     // Just an event flag? Where does this write?
   } else {
@@ -1204,26 +1210,33 @@ bool COMMAND_PROCESSOR::ExecutePacketType3_EVENT_WRITE_EXT(
   auto endianness = static_cast<xenos::Endian>(address & 0x3);
   address &= ~0x3;
 
-  // Let us hope we can fake this.
-  // This callback tells the driver the xy coordinates affected by a previous
-  // drawcall.
+  // The console reports the box, in 8-pixel units, of the primitives drawn
+  // since the last SCREEN_EXT_INIT (min x, max x, min y, max y, min z, max z,
+  // little-endian 16-bit, swapped by the address's endianness). INIT leaves
+  // the empty box, which a report with no draw since gives. The primitives'
+  // positions aren't known here, so any draw gives the whole screen. The
+  // console gives this z range with or without the depth test.
   // https://www.google.com/patents/US20060055701
-  uint16_t extents[] = {
-      byte_swap<unsigned short>(0 >> 3),  // min x
-      byte_swap<unsigned short>(xenos::kTexture2DCubeMaxWidthHeight >>
-                                3),       // max x
-      byte_swap<unsigned short>(0 >> 3),  // min y
-      byte_swap<unsigned short>(xenos::kTexture2DCubeMaxWidthHeight >>
-                                3),  // max y
-      byte_swap<unsigned short>(0),  // min z
-      byte_swap<unsigned short>(1),  // max z
-  };
-  assert_true(endianness == xenos::Endian::k8in16);
+  uint16_t extents[6];
+  if (screen_extents_drawn_) {
+    extents[0] = 0;
+    extents[1] = xenos::kTexture2DCubeMaxWidthHeight >> 3;
+    extents[2] = 0;
+    extents[3] = xenos::kTexture2DCubeMaxWidthHeight >> 3;
+  } else {
+    extents[0] = 0x3FF;
+    extents[1] = 0;
+    extents[2] = 0x3FF;
+    extents[3] = 0;
+  }
+  extents[4] = 0x7FF;
+  extents[5] = 0;
 
-  uint16_t* destination = (uint16_t*)memory_->TranslatePhysical(address);
-
-  for (unsigned i = 0; i < 6; ++i) {
-    destination[i] = extents[i];
+  uint32_t* destination = (uint32_t*)memory_->TranslatePhysical(address);
+  for (uint32_t i = 0; i < 3; ++i) {
+    destination[i] =
+        GpuSwap(uint32_t(extents[i * 2]) | (uint32_t(extents[i * 2 + 1]) << 16),
+                endianness);
   }
 
   trace_writer_.WriteMemoryWrite(CpuToGpu(address), sizeof(extents));
@@ -1396,6 +1409,7 @@ bool COMMAND_PROCESSOR::ExecutePacketType3Draw(
         COMMAND_PROCESSOR::PushDebugMarker("%s", opcode_name);
       }
 
+      screen_extents_drawn_ = true;
       draw_succeeded = COMMAND_PROCESSOR::IssueDraw(
           vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,
           is_indexed ? &index_buffer_info : nullptr,

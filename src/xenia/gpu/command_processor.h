@@ -797,6 +797,9 @@ class CommandProcessor {
 
   uint64_t bin_select_ = 0xFFFFFFFFull;
   uint64_t bin_mask_ = 0xFFFFFFFFull;
+  // Whether a draw has been issued since the last SCREEN_EXT_INIT, so a
+  // screen extents report is no longer the empty box INIT sets.
+  bool screen_extents_drawn_ = false;
 
   Shader* active_vertex_shader_ = nullptr;
   Shader* active_pixel_shader_ = nullptr;
