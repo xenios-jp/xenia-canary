@@ -146,6 +146,10 @@ class MetalRenderTargetCache final : public gpu::RenderTargetCache {
 
   // Whether 2x MSAA is supported on this device.
   bool msaa_2x_supported() const { return msaa_2x_supported_; }
+  // Whether draws rasterize at the Xenos sample positions.
+  bool xenos_sample_positions_used() const {
+    return xenos_sample_positions_used_;
+  }
 
   // Whether gamma render targets use UNORM16 storage (separate from sRGB).
   // When true, gamma correction is done in shaders rather than via sRGB format.
@@ -488,6 +492,7 @@ class MetalRenderTargetCache final : public gpu::RenderTargetCache {
   MTL::Texture* transfer_dummy_depth_[3] = {};
   MTL::Texture* transfer_dummy_stencil_[3] = {};
   bool msaa_2x_supported_ = true;
+  bool xenos_sample_positions_used_ = false;
 
   // Current render targets - updated by base class Update() call
 

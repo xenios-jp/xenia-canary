@@ -3903,7 +3903,9 @@ void MetalCommandProcessor::ComputeDrawViewportInfo(
                      : divisors::MagicDiv(1),
       true, kViewportBoundsMax, kViewportBoundsMax, false,
       normalized_depth_control, convert_z_to_float24, true,
-      pixel_shader && pixel_shader->writes_depth(), false);
+      pixel_shader && pixel_shader->writes_depth(),
+      render_target_cache_ &&
+          render_target_cache_->xenos_sample_positions_used());
   gviargs.SetupRegisterValues(regs, false);
   if (gviargs == previous_viewport_info_args_) {
     viewport_info_out = previous_viewport_info_;

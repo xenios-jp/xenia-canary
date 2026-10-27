@@ -724,6 +724,10 @@ bool MetalRenderTargetCache::Initialize() {
   // 2x msaa and unorm16 support virtually guarunteed as minimum OS target /
   // Metal version currently is MacOS 15 / Metal 3
   msaa_2x_supported_ = device_->supportsTextureSampleCount(2);
+  // Without native 2x MSAA, a pass's sample count wouldn't tell 2x from 4x.
+  xenos_sample_positions_used_ =
+      ::cvars::xenos_sample_positions && msaa_2x_supported_ &&
+      device_->programmableSamplePositionsSupported();
 
   native_stencil_output_probed_ = ProbeNativeStencilOutputSupport();
   if (!native_stencil_output_probed_) {
@@ -2900,6 +2904,23 @@ MTL::RenderPassDescriptor* MetalRenderTargetCache::GetRenderPassDescriptor(
     }
   } else if (!has_any_color_target) {
     dummy_color_target_ = nullptr;
+  }
+
+  if (xenos_sample_positions_used_ && coverage_samples >= 2) {
+    int8_t xenos_positions[4][2];
+    uint32_t position_count = draw_util::GetHostSampleXenosPositions(
+        coverage_samples >= 4 ? xenos::MsaaSamples::k4X
+                              : xenos::MsaaSamples::k2X,
+        true, false, xenos_positions);
+    // Metal's positions are from the pixel's top-left corner.
+    MTL::SamplePosition positions[4];
+    for (uint32_t i = 0; i < position_count; ++i) {
+      positions[i] = MTL::SamplePosition::Make(
+          0.5f + float(xenos_positions[i][0]) * (1.0f / 16.0f),
+          0.5f + float(xenos_positions[i][1]) * (1.0f / 16.0f));
+    }
+    cached_render_pass_descriptor_->setSamplePositions(positions,
+                                                       position_count);
   }
 
   render_pass_descriptor_dirty_ = false;
