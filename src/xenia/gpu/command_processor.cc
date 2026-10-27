@@ -899,12 +899,17 @@ void CommandProcessor::HandleSpecialRegisterWrite(uint32_t index,
   // Scratch register writeback.
   if (index >= XE_GPU_REG_SCRATCH_REG0 && index <= XE_GPU_REG_SCRATCH_REG7) {
     uint32_t scratch_reg = index - XE_GPU_REG_SCRATCH_REG0;
-    if ((1 << scratch_reg) & regs.values[XE_GPU_REG_SCRATCH_UMSK]) {
+    uint32_t scratch_mask = regs.values[XE_GPU_REG_SCRATCH_UMSK];
+    if ((1 << scratch_reg) & scratch_mask) {
       // Enabled - write to address.
       SubmitResolvesForGuestSync();
-      uint32_t scratch_addr = regs.values[XE_GPU_REG_SCRATCH_ADDR];
+      // The console drops SCRATCH_ADDR's low 5 bits.
+      uint32_t scratch_addr =
+          regs.values[XE_GPU_REG_SCRATCH_ADDR] & ~uint32_t(31);
       uint32_t mem_addr = scratch_addr + (scratch_reg * 4);
-      xe::store_and_swap<uint32_t>(memory_->TranslatePhysical(mem_addr), value);
+      auto endianness = static_cast<xenos::Endian>((scratch_mask >> 16) & 3);
+      xe::store<uint32_t>(memory_->TranslatePhysical(mem_addr),
+                          xenos::GpuSwapInline(value, endianness));
     }
   } else {
     switch (index) {
