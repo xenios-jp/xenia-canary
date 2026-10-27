@@ -286,14 +286,6 @@ DEFINE_bool(
     "extra instructions per operation are too slow there.",
     "GPU");
 
-DEFINE_bool(xenos_sample_positions, false,
-            "Rasterize 2x and 4x MSAA render targets at the Xenos sample "
-            "positions, like real hardware, if the GPU and driver support it.\n"
-            "Only applies to RTV/FBO - ROV/FSI render targets always use Xenos "
-            "positions since they safely map coverage and calculate depth "
-            "in-shader.",
-            "GPU");
-
 DEFINE_bool(texture_point_snap, false,
             "Snap normalized point sampled 2D texture coordinates to texel "
             "centers, and pick the guest texel when the resolution is scaled. "

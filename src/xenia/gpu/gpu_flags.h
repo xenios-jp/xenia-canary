@@ -89,8 +89,6 @@ DECLARE_bool(force_depth_clamp);
 
 DECLARE_bool(alu_round_toward_zero);
 
-DECLARE_bool(xenos_sample_positions);
-
 DECLARE_bool(texture_point_snap);
 
 DECLARE_bool(texture_border_color_frac);

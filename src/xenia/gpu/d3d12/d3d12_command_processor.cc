@@ -667,15 +667,12 @@ bool D3D12CommandProcessor::SetupContext() {
     return false;
   }
 
-  // ROV always uses Xenos' MSAA sample positions.
-  // xenos_sample_positions targets host RTs with programmable position support.
+  // Use Xenos sample positions whenever the command list and device support
+  // programmable positions, for both host render targets and ROV.
   xenos_sample_positions_used_ =
       command_list_1_ != nullptr &&
       provider.GetProgrammableSamplePositionsTier() !=
-          D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER_NOT_SUPPORTED &&
-      (render_target_cache_->GetPath() ==
-           RenderTargetCache::Path::kPixelShaderInterlock ||
-       cvars::xenos_sample_positions);
+          D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER_NOT_SUPPORTED;
 
   // Hybrid RTV queries count pre-test coverage in the pixel shader and clear
   // their counter slot with WriteBufferImmediate, so they need CommandList2.

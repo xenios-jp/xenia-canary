@@ -215,10 +215,6 @@ bool VulkanRenderTargetCache::Initialize(uint32_t shared_memory_binding_count) {
   if (vulkan_device->extensions().ext_EXT_sample_locations) {
     for (uint32_t i = 0; i < 2; ++i) {
       bool subpass_has_attachments = i != 0;
-      // FSI always uses Xenos' MSAA sample positions.
-      if (subpass_has_attachments && !cvars::xenos_sample_positions) {
-        continue;
-      }
       // Draws without attachments can change sample counts within a render
       // pass, so they need variable sample locations.
       if (!subpass_has_attachments &&

@@ -726,7 +726,7 @@ bool MetalRenderTargetCache::Initialize() {
   msaa_2x_supported_ = device_->supportsTextureSampleCount(2);
   // Without native 2x MSAA, a pass's sample count wouldn't tell 2x from 4x.
   xenos_sample_positions_used_ =
-      ::cvars::xenos_sample_positions && msaa_2x_supported_ &&
+      msaa_2x_supported_ &&
       device_->programmableSamplePositionsSupported();
 
   native_stencil_output_probed_ = ProbeNativeStencilOutputSupport();
