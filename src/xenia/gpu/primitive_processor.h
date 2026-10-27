@@ -188,6 +188,13 @@ class PrimitiveProcessor {
   // memory).
   bool Process(ProcessingResult& result_out);
 
+  // The console honors the primitive reset index in point and triangle lists
+  // too, drawing nothing for it, where host primitive restart can't be used.
+  // Returns the index to compare to the low 24 bits of the endian-swapped
+  // fetched index before the offset, or UINT32_MAX if there's none.
+  static uint32_t GetListResetIndex(const RegisterFile& regs,
+                                    const ProcessingResult& result);
+
   // Invalidates the cache within the range.
   std::pair<uint32_t, uint32_t> MemoryInvalidationCallback(
       uint32_t physical_address_start, uint32_t length, bool exact_range);

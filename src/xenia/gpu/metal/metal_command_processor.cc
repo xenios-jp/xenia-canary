@@ -8126,6 +8126,19 @@ void MetalCommandProcessor::UpdateSpirvSystemConstantValues(
   // Vertex index.
   consts.vertex_index_endian = index_endian;
   consts.vertex_base_index = regs.Get<reg::VGT_INDX_OFFSET>().indx_offset;
+  // The console clamps fetched indices, not auto-generated ones.
+  bool vertex_index_clamped =
+      primitive_processing_result.index_buffer_type !=
+          PrimitiveProcessor::ProcessedIndexBufferType::kNone &&
+      primitive_processing_result.index_buffer_type !=
+          PrimitiveProcessor::ProcessedIndexBufferType::kHostBuiltinForAuto;
+  consts.vertex_index_min =
+      vertex_index_clamped ? regs[XE_GPU_REG_VGT_MIN_VTX_INDX] & 0xFFFFFF : 0;
+  consts.vertex_index_max = vertex_index_clamped
+                                ? regs[XE_GPU_REG_VGT_MAX_VTX_INDX] & 0xFFFFFF
+                                : 0xFFFFFF;
+  consts.vertex_index_list_reset =
+      PrimitiveProcessor::GetListResetIndex(regs, primitive_processing_result);
   const bool is_vs_expansion_draw =
       primitive_processing_result.host_vertex_shader_type ==
           Shader::HostVertexShaderType::kPointListAsTriangleStrip ||

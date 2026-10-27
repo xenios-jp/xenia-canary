@@ -1628,6 +1628,25 @@ PrimitiveProcessor::CacheTransaction::~CacheTransaction() {
   }
 }
 
+uint32_t PrimitiveProcessor::GetListResetIndex(const RegisterFile& regs,
+                                               const ProcessingResult& result) {
+  if (result.IsTessellated() ||
+      result.index_buffer_type == ProcessedIndexBufferType::kNone ||
+      result.index_buffer_type ==
+          ProcessedIndexBufferType::kHostBuiltinForAuto ||
+      !regs.Get<reg::PA_SU_SC_MODE_CNTL>().multi_prim_ib_ena) {
+    return UINT32_MAX;
+  }
+  switch (result.guest_primitive_type) {
+    case xenos::PrimitiveType::kPointList:
+    case xenos::PrimitiveType::kTriangleList:
+      return regs.Get<reg::VGT_MULTI_PRIM_IB_RESET_INDX>().reset_indx &
+             0xFFFFFF;
+    default:
+      return UINT32_MAX;
+  }
+}
+
 std::pair<uint32_t, uint32_t> PrimitiveProcessor::MemoryInvalidationCallback(
     uint32_t physical_address_start, uint32_t length, bool exact_range) {
   if (length == 0 || physical_address_start >= SharedMemory::kBufferSize) {

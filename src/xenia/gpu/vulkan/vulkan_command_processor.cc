@@ -6517,6 +6517,25 @@ void VulkanCommandProcessor::UpdateSystemConstantValues(
   // Vertex index offset.
   dirty |= system_constants_.vertex_base_index != vgt_indx_offset;
   system_constants_.vertex_base_index = vgt_indx_offset;
+  // The console clamps fetched indices, not auto-generated ones.
+  bool vertex_index_clamped =
+      primitive_processing_result.index_buffer_type !=
+          PrimitiveProcessor::ProcessedIndexBufferType::kNone &&
+      primitive_processing_result.index_buffer_type !=
+          PrimitiveProcessor::ProcessedIndexBufferType::kHostBuiltinForAuto;
+  uint32_t vertex_index_min =
+      vertex_index_clamped ? regs[XE_GPU_REG_VGT_MIN_VTX_INDX] & 0xFFFFFF : 0;
+  uint32_t vertex_index_max = vertex_index_clamped
+                                  ? regs[XE_GPU_REG_VGT_MAX_VTX_INDX] & 0xFFFFFF
+                                  : 0xFFFFFF;
+  dirty |= system_constants_.vertex_index_min != vertex_index_min;
+  dirty |= system_constants_.vertex_index_max != vertex_index_max;
+  system_constants_.vertex_index_min = vertex_index_min;
+  system_constants_.vertex_index_max = vertex_index_max;
+  uint32_t vertex_index_list_reset =
+      PrimitiveProcessor::GetListResetIndex(regs, primitive_processing_result);
+  dirty |= system_constants_.vertex_index_list_reset != vertex_index_list_reset;
+  system_constants_.vertex_index_list_reset = vertex_index_list_reset;
 
   // Conversion to host normalized device coordinates.
   for (uint32_t i = 0; i < 3; ++i) {

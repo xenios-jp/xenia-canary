@@ -42,7 +42,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
     // version number! Backends add it to their dated
     // PipelineDescription::kVersion, so bumping either one is enough. Only
     // ever raise it, a reverted layout change needs another bump.
-    static constexpr uint32_t kVersion = 26;
+    static constexpr uint32_t kVersion = 27;
 
     enum class DepthStencilMode : uint32_t {
       kNoModifiers,
@@ -327,7 +327,14 @@ class SpirvShaderTranslator : public ShaderTranslator {
     uint32_t vertex_index_count;
     xenos::Endian vertex_index_endian;
     int32_t vertex_base_index;
-    uint32_t padding_after_vertex_index[3];
+    // VGT_MIN_VTX_INDX and VGT_MAX_VTX_INDX for indexed draws, the whole 24-bit
+    // range otherwise.
+    uint32_t vertex_index_min;
+    uint32_t vertex_index_max;
+    // The primitive reset index of point and triangle lists, which the console
+    // honors too, compared to the low 24 bits of the raw index; UINT32_MAX
+    // otherwise.
+    uint32_t vertex_index_list_reset;
 
     float ndc_scale[3];
     float point_vertex_diameter_min;
@@ -879,6 +886,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
   void CompleteVertexOrTessEvalShaderInMain();
   void ResetUcodeInvocationStateInMain();
   void ResetVertexShaderInvocationStateInMain();
+  // The index the guest's shader sees for a fetched or generated one.
+  spv::Id GuestVertexIndex(spv::Id vertex_index, spv::Id vertex_base_index);
   void WriteVertexIndexToRegister0(spv::Id vertex_index);
 
   void StartFragmentShaderBeforeMain();
@@ -1353,6 +1362,9 @@ class SpirvShaderTranslator : public ShaderTranslator {
     kSystemConstantVertexIndexCount,
     kSystemConstantVertexIndexEndian,
     kSystemConstantVertexBaseIndex,
+    kSystemConstantVertexIndexMin,
+    kSystemConstantVertexIndexMax,
+    kSystemConstantVertexIndexListReset,
     kSystemConstantNdcScale,
     kSystemConstantPointVertexDiameterMin,
     kSystemConstantNdcOffset,
@@ -1567,6 +1579,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
   spv::Id main_memexport_allowed_;
   // VS only - float3 (special exports).
   spv::Id var_main_point_size_edge_flag_kill_vertex_;
+  // Whether the vertex's raw index is the primitive reset index of a list.
+  spv::Id var_main_vertex_index_list_reset_;
   // PS, only when needed - bool.
   spv::Id var_main_kill_pixel_;
   // PS, when writing to color render targets - uint.

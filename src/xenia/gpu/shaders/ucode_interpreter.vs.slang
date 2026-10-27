@@ -25,6 +25,8 @@
 // System constants read as a raw std140 uint4 array, indexed by byte-offset / 16
 // so no field-packing assumptions are needed. Only the fields below are touched:
 //   [0].x flags   [0].w vertex_index_endian   [1].x vertex_base_index
+//   [1].y vertex_index_min   [1].z vertex_index_max
+//   [1].w vertex_index_list_reset
 //   [2].xyz ndc_scale   [3].xyz ndc_offset
 //   [34].x interpreter_ucode_base_dwords   [34].y interpreter_cf_instr_count
 // DXIL registers match the D3D12 Mesa (spirv_to_dxil) root signature: guest
@@ -41,6 +43,9 @@ XE_VK_BINDING(0, 0) ByteAddressBuffer xe_shared_memory : register(t0, space0);
 uint XeFlags() { return xe_sys[0].x; }
 uint XeVertexIndexEndian() { return xe_sys[0].w; }
 int XeVertexBaseIndex() { return asint(xe_sys[1].x); }
+uint XeVertexIndexMin() { return xe_sys[1].y; }
+uint XeVertexIndexMax() { return xe_sys[1].z; }
+uint XeVertexIndexListReset() { return xe_sys[1].w; }
 float3 XeNdcScale() { return asfloat(xe_sys[2].xyz); }
 float3 XeNdcOffset() { return asfloat(xe_sys[3].xyz); }
 uint XeUcodeBaseDwords() { return xe_sys[34].x; }
@@ -90,8 +95,11 @@ struct VSOut {
 };
 
 VSOut main(uint vid : SV_VertexID) {
-  // Match the SPIR-V VS r0 seed: endian-swapped host index plus the base index.
-  int index = int(EndianSwap(vid, XeVertexIndexEndian())) + XeVertexBaseIndex();
+  // Match the SPIR-V VS r0 seed: the endian-swapped host index's low 24 bits
+  // plus the base index, wrapped at 24 bits and clamped to the index range.
+  uint raw24 = EndianSwap(vid, XeVertexIndexEndian()) & 0xFFFFFFu;
+  uint index24 = (raw24 + uint(XeVertexBaseIndex())) & 0xFFFFFFu;
+  int index = int(clamp(index24, XeVertexIndexMin(), XeVertexIndexMax()));
   XeRunInterp(XeCfInstrCount(), float(index));
 
   // Guest clip-space position to host NDC, matching the translated VS output.
@@ -107,6 +115,8 @@ VSOut main(uint vid : SV_VertexID) {
 
   // Vertex kill: a non-zero oPts.z degenerates the vertex to NaN (OR-mode cull).
   if ((asuint(xe_kill) & 0x7FFFFFFFu) != 0u) w = asfloat(0x7FC00000u);
+  // A list's primitive reset index draws nothing.
+  if (raw24 == XeVertexIndexListReset()) w = asfloat(0x7FC00000u);
 
   VSOut o;
   o.pos = float4(xyz, w);

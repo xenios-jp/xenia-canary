@@ -375,6 +375,7 @@ void SpirvShaderTranslator::Reset() {
   var_main_memexport_data_written_ = spv::NoResult;
   main_memexport_allowed_ = spv::NoResult;
   var_main_point_size_edge_flag_kill_vertex_ = spv::NoResult;
+  var_main_vertex_index_list_reset_ = spv::NoResult;
   main_vertex_rect_list_as_triangle_strip_ = false;
   var_main_rect_list_strip_vertex_ = spv::NoResult;
   var_main_rect_list_guest_vertex_indices_ = spv::NoResult;
@@ -626,6 +627,12 @@ void SpirvShaderTranslator::StartTranslation() {
        type_uint_},
       {"vertex_base_index", offsetof(SystemConstants, vertex_base_index),
        type_int_},
+      {"vertex_index_min", offsetof(SystemConstants, vertex_index_min),
+       type_uint_},
+      {"vertex_index_max", offsetof(SystemConstants, vertex_index_max),
+       type_uint_},
+      {"vertex_index_list_reset",
+       offsetof(SystemConstants, vertex_index_list_reset), type_uint_},
       {"ndc_scale", offsetof(SystemConstants, ndc_scale), type_float3_},
       {"point_vertex_diameter_min",
        offsetof(SystemConstants, point_vertex_diameter_min), type_float_},
@@ -2074,6 +2081,35 @@ void SpirvShaderTranslator::ResetVertexShaderInvocationStateInMain() {
   }
 }
 
+spv::Id SpirvShaderTranslator::GuestVertexIndex(spv::Id vertex_index,
+                                                spv::Id vertex_base_index) {
+  // The console adds VGT_INDX_OFFSET to the low 24 bits of the index, wraps the
+  // sum at 24 bits, and clamps it to VGT_MIN_VTX_INDX and VGT_MAX_VTX_INDX.
+  spv::Id const_uint_24_bits = builder_->makeUintConstant(0xFFFFFF);
+  vertex_index = builder_->createBinOp(
+      spv::OpBitwiseAnd, type_uint_,
+      builder_->createBinOp(
+          spv::OpIAdd, type_uint_,
+          builder_->createBinOp(spv::OpBitwiseAnd, type_uint_, vertex_index,
+                                const_uint_24_bits),
+          builder_->createUnaryOp(spv::OpBitcast, type_uint_,
+                                  vertex_base_index)),
+      const_uint_24_bits);
+  auto load_system_constant = [&](SystemConstantIndex index) {
+    id_vector_temp_.clear();
+    id_vector_temp_.push_back(builder_->makeIntConstant(int(index)));
+    return builder_->createLoad(
+        builder_->createAccessChain(spv::StorageClassUniform,
+                                    uniform_system_constants_, id_vector_temp_),
+        spv::NoPrecision);
+  };
+  vertex_index = builder_->createTriBuiltinCall(
+      type_uint_, ext_inst_glsl_std_450_, GLSLstd450UClamp, vertex_index,
+      load_system_constant(kSystemConstantVertexIndexMin),
+      load_system_constant(kSystemConstantVertexIndexMax));
+  return builder_->createUnaryOp(spv::OpBitcast, type_int_, vertex_index);
+}
+
 void SpirvShaderTranslator::WriteVertexIndexToRegister0(spv::Id vertex_index) {
   if (!register_count()) {
     return;
@@ -2461,10 +2497,8 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
                                            vertex_index_in_bounds, vertex_index,
                                            const_uint_0_);
 
-      spv::Id guest_vertex_index = builder_->createBinOp(
-          spv::OpIAdd, type_int_,
-          builder_->createUnaryOp(spv::OpBitcast, type_int_, vertex_index),
-          vertex_base_index);
+      spv::Id guest_vertex_index =
+          GuestVertexIndex(vertex_index, vertex_base_index);
       id_vector_temp_.clear();
       id_vector_temp_.push_back(builder_->makeIntConstant(i));
       builder_->createStore(
@@ -2866,21 +2900,36 @@ void SpirvShaderTranslator::StartVertexOrTessEvalShaderInMain() {
                               spv::NoPrecision));
       }
       if (!main_vertex_rect_list_as_triangle_strip_) {
-        // Convert the index to a signed integer.
-        vertex_index =
-            builder_->createUnaryOp(spv::OpBitcast, type_int_, vertex_index);
-        // Add the base to the index.
+        // A list's primitive reset index draws nothing: kill the vertex, and
+        // with it the triangle.
+        id_vector_temp_.clear();
+        id_vector_temp_.push_back(
+            builder_->makeIntConstant(kSystemConstantVertexIndexListReset));
+        var_main_vertex_index_list_reset_ = builder_->createVariable(
+            spv::NoPrecision, spv::StorageClassFunction, type_bool_,
+            "xe_var_vertex_index_list_reset",
+            builder_->makeBoolConstant(false));
+        builder_->createStore(
+            builder_->createBinOp(
+                spv::OpIEqual, type_bool_,
+                builder_->createBinOp(spv::OpBitwiseAnd, type_uint_,
+                                      vertex_index,
+                                      builder_->makeUintConstant(0xFFFFFF)),
+                builder_->createLoad(
+                    builder_->createAccessChain(spv::StorageClassUniform,
+                                                uniform_system_constants_,
+                                                id_vector_temp_),
+                    spv::NoPrecision)),
+            var_main_vertex_index_list_reset_);
         id_vector_temp_.clear();
         id_vector_temp_.push_back(
             builder_->makeIntConstant(kSystemConstantVertexBaseIndex));
-        vertex_index = builder_->createBinOp(
-            spv::OpIAdd, type_int_, vertex_index,
-            builder_->createLoad(
-                builder_->createAccessChain(spv::StorageClassUniform,
-                                            uniform_system_constants_,
-                                            id_vector_temp_),
-                spv::NoPrecision));
-        WriteVertexIndexToRegister0(vertex_index);
+        WriteVertexIndexToRegister0(GuestVertexIndex(
+            vertex_index, builder_->createLoad(
+                              builder_->createAccessChain(
+                                  spv::StorageClassUniform,
+                                  uniform_system_constants_, id_vector_temp_),
+                              spv::NoPrecision)));
       }
     }
   }
@@ -3324,6 +3373,17 @@ void SpirvShaderTranslator::CompleteVertexOrTessEvalShaderInMain() {
               builder_->makeUintConstant(UINT32_C(0x7FC00000))),
           position_w);
     }
+  }
+
+  if (var_main_vertex_index_list_reset_ != spv::NoResult) {
+    position_w = builder_->createTriOp(
+        spv::OpSelect, type_float_,
+        builder_->createLoad(var_main_vertex_index_list_reset_,
+                             spv::NoPrecision),
+        builder_->createUnaryOp(
+            spv::OpBitcast, type_float_,
+            builder_->makeUintConstant(UINT32_C(0x7FC00000))),
+        position_w);
   }
 
   // Write the point size.
