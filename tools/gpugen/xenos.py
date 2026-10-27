@@ -17,7 +17,18 @@ address in units of three dwords from the start of the shader.
 CF_NOP = 0
 CF_EXEC = 1
 CF_EXEC_END = 2
+CF_COND_EXEC = 3
+CF_COND_EXEC_END = 4
+CF_COND_EXEC_PRED = 5
+CF_COND_EXEC_PRED_END = 6
+CF_LOOP_START = 7
+CF_LOOP_END = 8
+CF_COND_CALL = 9
+CF_RETURN = 10
+CF_COND_JMP = 11
 CF_ALLOC = 12
+CF_COND_EXEC_PRED_CLEAN = 13
+CF_COND_EXEC_PRED_CLEAN_END = 14
 
 # Alloc types.
 ALLOC_POSITION = 1
@@ -29,6 +40,12 @@ ALLOC_MEMORY = 3
 FETCH_VERTEX = 0
 FETCH_TEXTURE = 1
 FETCH_BORDER_COLOR_FRAC = 16
+FETCH_GET_COMPUTED_LOD = 17
+FETCH_GET_GRADIENTS = 18
+FETCH_GET_WEIGHTS = 19
+FETCH_SET_LOD = 24
+FETCH_SET_GRADIENTS_HORZ = 25
+FETCH_SET_GRADIENTS_VERT = 26
 
 # Vertex formats used here (xenos::VertexFormat).
 VF_32_32_FLOAT = 37
@@ -180,12 +197,13 @@ def tfetch(dst, src, src_swizzle, const_index, dimension=1, dst_swizzle='xyzw',
            vol_mag_filter=3, vol_min_filter=3,
            denormalized=False, fetch_valid_only=True, use_reg_lod=False,
            use_comp_lod=True, lod_bias=0, offsets=(0, 0, 0),
-           sample_location=0, unk=0, opcode=FETCH_TEXTURE):
+           sample_location=0, unk=0, use_reg_gradients=False,
+           opcode=FETCH_TEXTURE):
     """tfetch (1D/2D/3D/cube by `dimension`) into r`dst` from r`src`'s
     `src_swizzle` (absolute, up to three components) with texture fetch
     constant `const_index`. Filters default to the fetch constant's (3, aniso
-    7), as Direct3D's shaders do. `opcode` gives the other texture fetches
-    the same fields, such as getBCF."""
+    7), as Direct3D's shaders do. `lod_bias` is in 1/16ths; `opcode` gives the
+    other texture fetches the same fields, such as getBCF."""
     swz = 0
     for i, comp in enumerate(src_swizzle.ljust(3, 'x')):
         swz |= 'xyzw'.index(comp) << (2 * i)
@@ -196,31 +214,46 @@ def tfetch(dst, src, src_swizzle, const_index, dimension=1, dst_swizzle='xyzw',
           (min_filter << 14) | (mip_filter << 16) | (aniso_filter << 18) |
           (vol_mag_filter << 24) | (vol_min_filter << 26) |
           (int(use_comp_lod) << 28) | (int(use_reg_lod) << 29) | (unk << 30))
-    w2 = (sample_location << 1) | ((lod_bias & 0x7F) << 2) | (dimension << 14)
+    w2 = (int(use_reg_gradients) | (sample_location << 1) |
+          ((lod_bias & 0x7F) << 2) | (dimension << 14))
     for i, offset in enumerate(offsets):
         w2 |= (offset & 0x1F) << (16 + 5 * i)
     return Instruction((w0, w1, w2), True)
+
+
+def set_texture_state(opcode, src, src_swizzle):
+    """setTexLOD (FETCH_SET_LOD, one component) or setGradientH/V (two)
+    from r`src`, encoded as Direct3D's shaders do."""
+    swz = 0
+    for i, comp in enumerate(src_swizzle.ljust(3, src_swizzle[-1])):
+        swz |= 'xyzw'.index(comp) << (2 * i)
+    w0 = opcode | (src << 5) | (1 << 19) | (swz << 26)
+    return Instruction((w0, 0x8F1FFFFF, 0), True)
 
 
 class Source:
     """An ALU source: a temporary register or a float constant."""
 
     def __init__(self, index, is_temp, components='xyzw', negate=False,
-                 absolute=False):
+                 absolute=False, relative=False):
         self.index = index
         self.is_temp = is_temp
         self.swizzle = swizzle(components)
         self.negate = negate
         self.absolute = absolute
+        self.relative = relative
 
     def reg_byte(self):
         if not self.is_temp:
             return self.index & 0xFF
-        return (self.index & 0x3F) | (0x80 if self.absolute else 0)
+        return ((self.index & 0x3F) | (0x40 if self.relative else 0) |
+                (0x80 if self.absolute else 0))
 
 
-def r(index, components='xyzw', negate=False, absolute=False):
-    return Source(index, True, components, negate, absolute)
+def r(index, components='xyzw', negate=False, absolute=False,
+      relative=False):
+    """A temporary register source, r[aL + index] if `relative`."""
+    return Source(index, True, components, negate, absolute, relative)
 
 
 def c(index, components='xyzw', negate=False):
@@ -230,16 +263,23 @@ def c(index, components='xyzw', negate=False):
 def alu(vector_op=V_ADD, vector_dest=0, vector_mask=0, scalar_op=S_RETAIN_PREV,
         scalar_dest=0, scalar_mask=0, src1=None, src2=None, src3=None,
         export=False, abs_constants=False, serialize=False,
-        scalar_const_temp=None, a0_relative=False):
+        scalar_const_temp=None, a0_relative=False, predicate=None,
+        loop_relative=False, vector_dest_relative=False,
+        scalar_dest_relative=False):
     """An ALU instruction. Exports write both results to `vector_dest`.
     `scalar_const_temp` is (temp register, component) for mulsc/addsc/subsc,
     whose constant operand is src3 (its W-relative swizzle picks the
     component). `a0_relative` makes the constant sources read c[a0 + index]
-    (const_address_register_relative with both constant addressing bits)."""
+    (const_address_register_relative with both constant addressing bits),
+    `loop_relative` c[aL + index]. `predicate` True or False runs it only
+    where the predicate is that. The dest relative bits add aL to a temp
+    destination; Direct3D sets `scalar_dest_relative` on every export."""
     # Unused sources read c0, like the assembler leaves them.
     sources = [src1 or c(0), src2 or c(0), src3 or c(0)]
-    w0 = ((vector_dest & 0x3F) | ((1 if abs_constants else 0) << 7) |
-          ((scalar_dest & 0x3F) << 8) | ((1 if export else 0) << 15) |
+    w0 = ((vector_dest & 0x3F) | (int(vector_dest_relative) << 6) |
+          ((1 if abs_constants else 0) << 7) |
+          ((scalar_dest & 0x3F) << 8) | (int(scalar_dest_relative) << 14) |
+          ((1 if export else 0) << 15) |
           (vector_mask << 16) | (scalar_mask << 20) | (scalar_op << 26))
     src3_swizzle = sources[2].swizzle
     src3_sel = int(sources[2].is_temp)
@@ -259,6 +299,10 @@ def alu(vector_op=V_ADD, vector_dest=0, vector_mask=0, scalar_op=S_RETAIN_PREV,
           (int(sources[1].negate) << 25) | (int(sources[0].negate) << 26))
     if a0_relative:
         w1 |= (1 << 29) | (1 << 30) | (1 << 31)
+    if loop_relative:
+        w1 |= (1 << 30) | (1 << 31)
+    if predicate is not None:
+        w1 |= (1 << 28) | (int(predicate) << 27)
     w2 = (sources[2].reg_byte() | (sources[1].reg_byte() << 8) |
           (sources[0].reg_byte() << 16) | (vector_op << 24) |
           (src3_sel << 29) | (int(sources[1].is_temp) << 30) |
@@ -267,33 +311,88 @@ def alu(vector_op=V_ADD, vector_dest=0, vector_mask=0, scalar_op=S_RETAIN_PREV,
 
 
 class Shader:
+    """Control flow (execs, allocs, loops, jumps and calls; targets are
+    labels) and the fetch and ALU instructions the execs run."""
+
     def __init__(self):
         self.cf = []   # (kind, args)
         self.instructions = []
 
-    def exec_(self, instructions, end=False):
+    def exec_(self, instructions, end=False, condition=None,
+              predicate_clean=True):
         """One exec per up to six instructions. An empty one with `end`
-        only ends the shader, as Direct3D's do after the last alloc."""
+        only ends the shader, as Direct3D's do after the last alloc.
+        `condition` makes them conditional: ('bool', constant, value) on a
+        bool constant, ('bool clean', constant, value) the predicate-clean
+        form, or ('pred', value) on the predicate. An exec setting the
+        predicate for control flow after it clears `predicate_clean`, as
+        Direct3D's do: control flow doesn't see a setp in a clean exec."""
         if not instructions:
-            self.cf.append(('exec', (0, [], end)))
+            self.cf.append(('exec', (0, [], end, condition,
+                                     predicate_clean)))
             return
         for start in range(0, len(instructions), 6):
             chunk = instructions[start:start + 6]
             last = start + 6 >= len(instructions)
             self.cf.append(('exec', (len(self.instructions), chunk,
-                                     end and last)))
+                                     end and last, condition,
+                                     predicate_clean)))
             self.instructions += chunk
 
     def alloc(self, kind, size):
         self.cf.append(('alloc', (kind, size)))
 
+    def label(self, name):
+        """Names the next control flow instruction."""
+        self.cf.append(('label', name))
+
+    def loop_start(self, loop, exit_label, repeat=False):
+        """Starts a loop over loop constant `loop`, leaving to `exit_label`
+        (after its loop_end) when it runs no iteration."""
+        self.cf.append(('loop_start', (loop, exit_label, repeat)))
+
+    def loop_end(self, loop, body_label, predicated_break=None):
+        """Ends the loop whose body starts at `body_label`; with
+        `predicated_break` True or False it also leaves where the predicate
+        is that."""
+        self.cf.append(('loop_end', (loop, body_label, predicated_break)))
+
+    def jmp(self, target, condition=None):
+        """Jumps to `target`: always, or on ('bool', constant, value) or
+        ('pred', value)."""
+        self.cf.append(('jmp', (target, condition)))
+
+    def call(self, target, condition=None):
+        self.cf.append(('call', (target, condition)))
+
+    def ret(self):
+        self.cf.append(('return', ()))
+
     def words(self):
-        cf_count = len(self.cf) + (len(self.cf) & 1)
-        base = cf_count // 2  # each pair takes one instruction slot
-        cf48 = []
+        cf = [(kind, args) for kind, args in self.cf if kind != 'label']
+        labels, index = {}, 0
         for kind, args in self.cf:
+            if kind == 'label':
+                labels[args] = index
+            else:
+                index += 1
+        cf_count = len(cf) + (len(cf) & 1)
+        base = cf_count // 2  # each pair takes one instruction slot
+
+        def branch(opcode, target, condition):
+            lo = labels[target] & 0x1FFF
+            hi = opcode << 12
+            if condition is None:
+                return lo | (1 << 13), hi | (1 << 10)
+            if condition[0] == 'pred':
+                return lo | (1 << 14), hi | (int(condition[1]) << 10)
+            _, constant, value = condition
+            return lo, hi | (constant << 2) | (int(value) << 10)
+
+        cf48 = []
+        for kind, args in cf:
             if kind == 'exec':
-                index, chunk, end = args
+                index, chunk, end, condition, clean = args
                 sequence = 0
                 # One bit per vertex fetch, as in Direct3D's shaders.
                 vertex_fetches = 0
@@ -303,12 +402,43 @@ class Shader:
                     vertex_fetches |= int(ins.is_vertex_fetch) << i
                 lo = (((base + index) & 0xFFF) | (len(chunk) << 12) |
                       (sequence << 16) | ((vertex_fetches & 0xF) << 28))
-                hi = ((vertex_fetches >> 4) | (1 << 9) |
-                      ((CF_EXEC_END if end else CF_EXEC) << 12))
-            else:
+                hi = vertex_fetches >> 4
+                if condition is None:
+                    hi |= ((int(clean) << 9) |
+                           ((CF_EXEC_END if end else CF_EXEC) << 12))
+                elif condition[0] == 'pred':
+                    hi |= ((int(clean) << 9) | (int(condition[1]) << 10) |
+                           ((CF_COND_EXEC_PRED_END if end
+                             else CF_COND_EXEC_PRED) << 12))
+                else:
+                    form, constant, value = condition
+                    opcode = ((CF_COND_EXEC_END if end else CF_COND_EXEC)
+                              if form == 'bool' else
+                              (CF_COND_EXEC_PRED_CLEAN_END if end
+                               else CF_COND_EXEC_PRED_CLEAN))
+                    hi |= (constant << 2) | (int(value) << 10) | (opcode << 12)
+            elif kind == 'alloc':
                 alloc_kind, size = args
                 lo = size & 7
                 hi = (alloc_kind << 9) | (CF_ALLOC << 12)
+            elif kind == 'loop_start':
+                loop, exit_label, repeat = args
+                lo = (labels[exit_label] & 0x1FFF) | (int(repeat) << 13) | \
+                    (loop << 16)
+                hi = CF_LOOP_START << 12
+            elif kind == 'loop_end':
+                loop, body_label, predicated_break = args
+                lo = (labels[body_label] & 0x1FFF) | (loop << 16)
+                hi = (1 << 10) | (CF_LOOP_END << 12)
+                if predicated_break is not None:
+                    lo |= 1 << 21
+                    hi = (int(predicated_break) << 10) | (CF_LOOP_END << 12)
+            elif kind == 'jmp':
+                lo, hi = branch(CF_COND_JMP, *args)
+            elif kind == 'call':
+                lo, hi = branch(CF_COND_CALL, *args)
+            else:
+                lo, hi = 0, CF_RETURN << 12
             cf48.append((lo, hi))
         if len(cf48) & 1:
             cf48.append((0, CF_NOP << 12))
