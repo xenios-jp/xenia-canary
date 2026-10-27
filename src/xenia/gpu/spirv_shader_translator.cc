@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <thread>
+#include <unordered_set>
 
 #include "third_party/fmt/include/fmt/format.h"
 #include "third_party/glslang/SPIRV/GLSL.std.450.h"
@@ -1212,6 +1213,30 @@ std::vector<uint8_t> SpirvShaderTranslator::CompleteTranslation() {
     function_main_->addBlock(main_loop_continue_);
     builder_->setBuildPoint(main_loop_continue_);
     if (has_main_switch) {
+      // Drop the jumps from blocks control flow never reaches, such as guest
+      // code after an exece. The builder removes those blocks when writing the
+      // module, but not the OpPhi parents naming them, which leaves the module
+      // invalid.
+      std::unordered_set<spv::Id> reachable_blocks;
+      spv::inReadableOrder(
+          function_main_->getEntryBlock(),
+          [&reachable_blocks](spv::Block* block, spv::ReachReason reason,
+                              spv::Block* header) {
+            if (reason == spv::ReachViaControlFlow) {
+              reachable_blocks.insert(block->getId());
+            }
+          });
+      size_t reachable_operand_count = 0;
+      for (size_t i = 0; i + 1 < main_switch_next_pc_phi_operands_.size();
+           i += 2) {
+        if (reachable_blocks.count(main_switch_next_pc_phi_operands_[i + 1])) {
+          main_switch_next_pc_phi_operands_[reachable_operand_count++] =
+              main_switch_next_pc_phi_operands_[i];
+          main_switch_next_pc_phi_operands_[reachable_operand_count++] =
+              main_switch_next_pc_phi_operands_[i + 1];
+        }
+      }
+      main_switch_next_pc_phi_operands_.resize(reachable_operand_count);
       // OpPhi, if added, must be the first in the block.
       // If labels were added, but not jumps (for example, due to the call
       // instruction not being implemented as of October 18, 2020), send an
