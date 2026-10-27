@@ -125,6 +125,39 @@ Suites:
 - `stencil`, `depthstate`, `depthstencil`, `depthbias`, `depthbias2x`,
   `depthslope`, `depthgeometry`, `msaadepth`: D24S8 and D24FS8 conversion
   and compares, stencil, bias and slopes (`depthcases`).
+- `depthround`, `depthround1x`, `depthround4x`: pinned D24S8/D24FS8
+  representation boundaries, halfway cases and shader depth special values,
+  through vertex and shader depth paths, reading every sample.
+- `depthbiasprobe`, `depthbiasprobe1x`, `depthbiasprobe4x`: signed constant
+  and slope bias, with positive and negative depth planes, at every sample.
+- `stencil2x`, `stencil4x`: every stencil operation at stencil-fail,
+  depth-fail and pass; wrap/saturation endpoints, write masks, every compare
+  below/at/above its reference, read masks, and two-sided front/back state.
+  The matrix covers these axes with selected combinations, not their full
+  Cartesian product. Readbacks retain both depth and stencil bits.
+- `pointcoord`: raw point coordinates and asymmetric texture sampling, with
+  integer/fractional sizes, subpixel positions, both viewport Y directions
+  and scissor clipping. `pointprecision` isolates raw point-coordinate
+  precision around size boundaries without texture filtering. `pointphase`,
+  `pointrect` and `pointarea` vary subpixel phase, translation and the other
+  point dimension to isolate raster setup precision.
+- `hizbases`: additional hierarchical depth buffer configurations from
+  traces, with hidden/shown geometry, stale contents, edge coverage and
+  disabled depth writes. Reuses the initialized-buffer scenarios in `hiz`.
+- `depthnan`: separates texture fetch, shader arithmetic and depth export for
+  signed quiet/signaling NaNs, infinities and finite controls. `depthbiasorder`
+  separates bias-before-conversion from conversion-before-bias.
+- `mexportmask`, `mexportlanes`, `mexportendian`, `mexportedge`: initialized
+  component masks, scalar/vector writes, format-specific channel selection,
+  byte permutations and conversion boundaries, including signed NaNs.
+- `mexportaddr`, `mexportaddrmap`, `mexportalloc`, `mexportorder`: bounded
+  single-invocation address, stream-count, allocation and predication probes.
+  Undersized-allocation cases are recorded separately from properly allocated
+  exports; all potential writes remain within owned test memory.
+- `tessellation`: raw adaptive quad inputs at several factors.
+  `tessellation_domain`: clockwise folded-domain reconstruction and
+  nonadaptive quad inputs. These suites do not cover triangle or
+  control-point-indexed tessellation.
 - `merger1`-`merger3`, `gammablend`, `gammamsaa`, `color7e3`, `msaablend`,
   `samplecov`, `unormresolve`: render targets and exports, gamma, 7e3, MSAA
   blending, sample coverage and resolves (`merger`).
