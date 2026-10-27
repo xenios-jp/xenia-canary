@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Runs a built gpugen suite in Xenia or on a console and compares runs.
+"""Build, run and compare GPU workloads on Xbox 360 and Xenia.
+
+    python3 tools/gpugen/run.py trace TRACE.xtr OUTDIR --microcode IMAGE
+    python3 tools/gpugen/run.py report CONSOLE_OUTDIR
+    python3 tools/gpugen/run.py isolate CONSOLE_OUTDIR DIAGNOSTIC.xtr
 
     python3 tools/gpugen/run.py xenia OUTDIR
     python3 tools/gpugen/run.py replay OUTDIR
@@ -776,12 +780,20 @@ def check_play(meta, data, outdir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sub = parser.add_subparsers(dest='command', required=True)
-    p = sub.add_parser('xenia')
+    p = sub.add_parser('trace', help='build an Xbox replay title from a captured .xtr')
+    play.add_arguments(p)
+    import stage_report
+    p = sub.add_parser('report', help='generate HTML from recorded Xbox and backend results')
+    stage_report.add_arguments(p)
+    import stage_isolate
+    p = sub.add_parser('isolate', help='create a resolved-memory diagnostic trace')
+    stage_isolate.add_arguments(p)
+    p = sub.add_parser('xenia', help='execute a generated title inside Xenia')
     p.add_argument('outdir')
     p.add_argument('--timeout', type=int, default=30)
     p.add_argument('--xenia-arg', action='append', default=[],
                    help='extra Xenia argument, e.g. --xenia-arg=--gpu=vulkan')
-    p = sub.add_parser('replay')
+    p = sub.add_parser('replay', help='replay recorded stages through a backend trace dump')
     p.add_argument('outdir')
     p.add_argument('--gpu', default='metal' if sys.platform == 'darwin'
                    else 'vulkan')
@@ -792,23 +804,29 @@ def main():
                    help='a play build\'s replay starts from the console\'s '
                    'eDRAM dump in FILE, the dump or results holding it '
                    '(default OUTDIR/console_edram_before.bin)')
-    p = sub.add_parser('console')
+    p = sub.add_parser('console', help='run generated titles on Xbox and collect reference data')
     p.add_argument('outdir', nargs='+')
     p.add_argument('--timeout', type=int, default=30,
                    help='how long an XBDM run may take')
-    p = sub.add_parser('diff')
+    p = sub.add_parser('diff', help='compare decoded result files in the terminal')
     p.add_argument('a')
     p.add_argument('b')
-    p = sub.add_parser('expect')
+    p = sub.add_parser('expect', help='record a verified synthetic console reference')
     p.add_argument('outdir')
     p.add_argument('expected')
     p.add_argument('--source', required=True,
                    help='where the run came from, e.g. the console and date')
-    p = sub.add_parser('check')
+    p = sub.add_parser('check', help='check replay results against a stored console reference')
     p.add_argument('expected')
     p.add_argument('outdir')
     args = parser.parse_args()
-    if args.command == 'xenia':
+    if args.command == 'trace':
+        play.run_from_args(args)
+    elif args.command == 'report':
+        stage_report.run_from_args(args)
+    elif args.command == 'isolate':
+        stage_isolate.run_from_args(args)
+    elif args.command == 'xenia':
         run_xenia(args.outdir, args.timeout, args.xenia_arg)
     elif args.command == 'replay':
         run_replay(args.outdir, args.gpu, args.timeout, args.dump_arg,

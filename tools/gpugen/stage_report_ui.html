@@ -1,0 +1,542 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>__TITLE__</title>
+<style>
+:root{
+  --bg:#f5f5f7; --card:#ffffff; --text:#1d1d1f; --sec:#6e6e73; --ter:#86868b;
+  --sep:rgba(0,0,0,.08); --fill:rgba(0,0,0,.04); --hover:rgba(0,0,0,.025);
+  --green:#248a3d; --green-t:rgba(52,199,89,.14); --green-s:#34c759;
+  --amber:#a05a00; --amber-t:rgba(255,159,10,.16); --amber-s:#ff9f0a;
+  --blue:#0066cc; --blue-t:rgba(0,113,227,.10); --blue-s:#0071e3;
+  --gray:#6e6e73; --gray-t:rgba(142,142,147,.16); --gray-s:#c7c7cc;
+  --red:#c9302c; --red-s:#ff3b30;
+  --hi:#e34948; --lo:#2a78d6; --extra:#f5c400; --missing:#1baf7a; --edram:#b07ce8; --pre:#8e8e93;
+  --shadow:0 1px 2px rgba(0,0,0,.04),0 4px 24px rgba(0,0,0,.04);
+  --mono:"SF Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#000000; --card:#1c1c1e; --text:#f5f5f7; --sec:#a1a1a6; --ter:#7c7c80;
+  --sep:rgba(255,255,255,.10); --fill:rgba(255,255,255,.06); --hover:rgba(255,255,255,.035);
+  --green:#30d158; --green-t:rgba(48,209,88,.16); --green-s:#30d158;
+  --amber:#ffb340; --amber-t:rgba(255,159,10,.18); --amber-s:#ff9f0a;
+  --blue:#409cff; --blue-t:rgba(10,132,255,.16); --blue-s:#0a84ff;
+  --gray:#98989d; --gray-t:rgba(142,142,147,.2); --gray-s:#48484a;
+  --red:#ff6961; --red-s:#ff453a;
+  --hi:#e66767; --lo:#3987e5;
+  --shadow:none;
+  color-scheme:dark;
+}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:15px/1.47 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+.wrap{max-width:1180px;margin:0 auto;padding:56px 22px 80px}
+code,.mono{font-family:var(--mono);font-size:.86em;letter-spacing:0}
+a{color:var(--blue);text-decoration:none} a:hover{text-decoration:underline}
+button{font:inherit;color:inherit}
+.eyebrow{font-size:13px;font-weight:600;color:var(--sec);letter-spacing:.02em;margin:0 0 6px}
+h1{font:600 44px/1.08 -apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",sans-serif;letter-spacing:-.028em;margin:0}
+.sub{color:var(--sec);font-size:17px;margin:12px 0 0;max-width:720px}
+.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap}
+.seg{display:inline-flex;background:var(--fill);border-radius:9px;padding:2px;gap:2px;flex:none}
+.seg a,.seg button{border:0;background:transparent;border-radius:7px;padding:5px 12px;font-size:13px;font-weight:500;color:var(--sec);cursor:pointer;white-space:nowrap}
+.seg .on{background:var(--card);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.1);text-decoration:none}
+.seg a:hover{text-decoration:none;color:var(--text)}
+.hero{margin:40px 0 18px;background:var(--card);border-radius:20px;padding:30px 32px 26px;box-shadow:var(--shadow)}
+.big{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.big .n{font:600 64px/1 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.big .t{font-size:21px;font-weight:600;letter-spacing:-.02em}
+.big .t span{color:var(--sec);font-weight:400}
+.bar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--fill);margin:22px 0 16px;gap:2px}
+.bar i{display:block;height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:8px 22px;font-size:13px;color:var(--sec);margin:0;padding:0;list-style:none}
+.legend b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums;margin-right:4px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
+.c-proven{background:var(--green-s)} .c-likely{background:var(--blue-s)} .c-unknown{background:var(--amber-s)}
+.c-na{background:var(--gray-s)} .c-identical{background:transparent;box-shadow:inset 0 0 0 1.5px var(--gray-s)}
+.hero .note{font-size:13px;color:var(--ter);margin:16px 0 0;max-width:820px}
+.meta{display:flex;flex-wrap:wrap;gap:6px 22px;font-size:13px;color:var(--ter);margin:0 0 30px}
+.meta b{color:var(--sec);font-weight:500}
+.meta button{border:0;background:none;padding:0;color:var(--blue);cursor:pointer;font-size:13px}
+section{margin-top:44px}
+section>h2{font:600 24px/1.2 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;letter-spacing:-.02em;margin:0 0 4px}
+section>.gsub{color:var(--sec);font-size:13px;margin:0 0 14px;max-width:820px}
+.card{background:var(--card);border-radius:18px;box-shadow:var(--shadow);min-width:0}
+.pad{padding:22px 24px}
+/* Ranked table */
+.rank{width:100%;border-collapse:collapse}
+.rank th{font-size:12px;font-weight:500;color:var(--ter);text-align:left;padding:14px 14px 9px;border-bottom:1px solid var(--sep);white-space:nowrap}
+.rank td{padding:14px;border-top:1px solid var(--sep);vertical-align:top;font-size:14px}
+.rank tbody tr:first-child td{border-top:0}
+.rank tbody tr{cursor:pointer}
+.rank tbody tr:hover td{background:var(--hover)}
+.rank tbody tr:focus-visible{outline:2px solid var(--blue-s);outline-offset:-2px}
+.pass b{display:block;font-weight:600;letter-spacing:-.015em}
+.pass small{display:block;color:var(--ter);font-size:12px;margin-top:2px;font-variant-numeric:tabular-nums}
+.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.meter{display:flex;align-items:center;gap:8px}
+.meter .track{width:64px;height:6px;border-radius:3px;background:var(--fill);overflow:hidden;flex:none}
+.meter .track i{display:block;height:100%;background:var(--text);opacity:.8;border-radius:3px}
+.meter span{font-weight:600}
+.played{color:var(--sec)}
+.what{color:var(--sec);font-size:13px;line-height:1.45;max-width:36ch}
+.whys{display:grid;gap:7px;min-width:230px}
+.why{display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.35}
+.why .pc{color:var(--ter);font-variant-numeric:tabular-nums;font-size:12px;white-space:nowrap;margin-left:auto;padding-left:6px}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;line-height:18px;height:20px;border-radius:10px;padding:0 8px;white-space:nowrap;flex:none}
+.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.b-proven{color:var(--green);background:var(--green-t)} .b-likely{color:var(--blue);background:var(--blue-t)}
+.b-unknown{color:var(--amber);background:var(--amber-t)} .b-na{color:var(--gray);background:var(--gray-t)}
+.agree{font-size:12px;color:var(--ter);white-space:nowrap}
+.agree.no{color:var(--amber);font-weight:600}
+.agree small{display:block;font-weight:400;color:var(--ter);white-space:normal;margin-top:2px;max-width:18ch}
+.next{font-size:12.5px;color:var(--sec);max-width:26ch;line-height:1.4}
+.tail{padding:12px 16px;font-size:13px;color:var(--ter);border-top:1px solid var(--sep)}
+.tail a{font-weight:500}
+/* Frames */
+.frames{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.frame h3{font-size:15px;font-weight:600;margin:0}
+.frame .r{font-size:12px;color:var(--ter);margin:2px 0 12px}
+.frame ul{list-style:none;margin:0;padding:0}
+.frame li{display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:7px 0;border-top:1px solid var(--sep);font-size:14px}
+.frame li:first-child{border-top:0}
+.frame li a{color:var(--text);font-weight:500;min-width:0}
+.frame li .c{color:var(--ter);font-size:12px;font-variant-numeric:tabular-nums;margin-left:6px;font-weight:400}
+.frame li .w{font-size:12px;font-variant-numeric:tabular-nums;color:var(--sec);white-space:nowrap}
+/* Tables */
+.tbl{overflow-x:auto}
+table.plain{border-collapse:collapse;width:100%;font-size:13px}
+table.plain th{text-align:left;font-weight:500;color:var(--ter);font-size:12px;padding:0 12px 7px 0;white-space:nowrap}
+table.plain td{border-top:1px solid var(--sep);padding:8px 12px 8px 0;vertical-align:top}
+table.plain td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+.unk{color:var(--ter)}
+.warnchip{display:inline-block;font-size:11px;font-weight:600;color:var(--amber);background:var(--amber-t);border-radius:5px;padding:0 6px;margin-left:4px}
+footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--sep);font-size:12px;color:var(--ter);line-height:1.6}
+footer p{margin:0 0 6px;max-width:900px}
+/* Detail */
+.back{display:inline-flex;align-items:center;gap:6px;font-size:14px;margin-bottom:22px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.chip{font-size:12px;background:var(--fill);border-radius:6px;padding:2px 8px;color:var(--sec)}
+.chip.on{background:var(--text);color:var(--bg)}
+a.chip:hover{text-decoration:none;color:var(--text)}
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:30px 0 0}
+.stat{background:var(--card);border-radius:16px;padding:16px 18px;box-shadow:var(--shadow)}
+.stat .n{font:600 30px/1.05 -apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.stat .l{color:var(--sec);font-size:13px;margin-top:5px}
+.causes{display:grid;gap:0}
+.cause{padding:18px 24px;border-top:1px solid var(--sep)}
+.cause:first-child{border-top:0}
+.cause .h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.cause .h b{font-size:16px;font-weight:600;letter-spacing:-.015em}
+.cause .h .share{margin-left:auto;display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums;font-size:13px;color:var(--sec)}
+.cause .h .share .track{width:90px;height:6px;border-radius:3px;background:var(--fill);overflow:hidden}
+.cause .h .share .track i{display:block;height:100%;border-radius:3px}
+.cause p{margin:8px 0 0;max-width:820px}
+.cause .ev{color:var(--sec);font-size:13px}
+.cause .ft{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:12.5px;color:var(--ter)}
+.cause .ft b{color:var(--sec);font-weight:500}
+.note{background:var(--blue-t);color:var(--text);border-radius:14px;padding:13px 16px;font-size:14px;margin-top:14px}
+.note b{font-weight:600}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+.split{display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--fill);gap:2px;margin:14px 0 10px}
+.split i{display:block;height:100%}
+.hist{display:grid;gap:14px;margin-top:16px}
+.hrow .lab{font-size:12px;color:var(--sec);margin-bottom:4px;display:flex;justify-content:space-between}
+.bars{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;align-items:end;height:64px;border-bottom:1px solid var(--sep)}
+.bars i{display:block;border-radius:3px 3px 0 0;min-height:0;position:relative}
+.bars i.neg{background:var(--lo)} .bars i.pos{background:var(--hi)}
+.bars i:hover{opacity:.75}
+.ticks{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:2px;font-size:10px;color:var(--ter);text-align:center;margin-top:3px;font-variant-numeric:tabular-nums}
+.tip{position:fixed;pointer-events:none;background:var(--text);color:var(--bg);font-size:12px;padding:5px 8px;border-radius:7px;z-index:10;white-space:nowrap;opacity:0;transition:opacity .1s}
+.viewer .tools{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;padding:16px 20px;border-bottom:1px solid var(--sep)}
+.viewer .tools .sp{flex:1}
+.stagebox{position:relative;line-height:0;cursor:crosshair;overflow:auto;max-height:78vh;background:repeating-conic-gradient(var(--fill) 0 25%,transparent 0 50%) 0 0/16px 16px}
+.stagebox .layer{position:relative;display:inline-block}
+.stagebox img{display:block;width:100%;height:auto;image-rendering:pixelated;user-select:none;-webkit-user-drag:none}
+.stagebox img.top{position:absolute;inset:0}
+.stagebox .handle{position:absolute;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.35);pointer-events:none}
+.stagebox .mark{position:absolute;width:13px;height:13px;margin:-7px 0 0 -7px;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 1px rgba(0,0,0,.5);pointer-events:none}
+.stagebox .tag{position:absolute;top:8px;font:600 11px/1 -apple-system,sans-serif;color:#fff;background:rgba(0,0,0,.55);padding:4px 7px;border-radius:6px;pointer-events:none}
+.slider{width:160px}
+.keys{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12px;color:var(--sec);padding:12px 20px}
+.keys span{display:inline-flex;align-items:center;gap:6px}
+.keys i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.insp{padding:18px 22px}
+.insp .empty{color:var(--ter);font-size:14px}
+.loupes{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 14px}
+.loupe{width:132px}
+.loupe div{width:132px;height:132px;border-radius:10px;background-repeat:no-repeat;image-rendering:pixelated;box-shadow:inset 0 0 0 1px var(--sep);position:relative}
+.loupe div::after{content:"";position:absolute;left:60px;top:60px;width:12px;height:12px;box-shadow:0 0 0 1.5px #fff,0 0 0 2.5px rgba(0,0,0,.5)}
+.loupe small{display:block;font-size:11px;color:var(--ter);margin-top:4px;text-align:center}
+.words td{font-family:var(--mono);font-size:12px}
+.words td:first-child{font-family:inherit;font-size:13px}
+.words .d{color:var(--sec)}
+.hi{color:var(--hi)} .lo{color:var(--lo)}
+.pills{display:flex;gap:6px;flex-wrap:wrap}
+@media (max-width:860px){
+  .wrap{padding:36px 16px 56px}
+  h1{font-size:34px} .sub{font-size:15px}
+  .hero{padding:24px 20px 22px;margin-top:28px;border-radius:18px}
+  .big .n{font-size:52px} .big .t{font-size:18px}
+  .rank thead{display:none}
+  .rank,.rank tbody,.rank tr,.rank td{display:block;width:100%}
+  .rank tr{padding:14px 16px;border-top:1px solid var(--sep)}
+  .rank tbody tr:first-child{border-top:0}
+  .rank td{border:0;padding:3px 0}
+  .rank td.c-wrong,.rank td.c-played{display:inline-block;width:auto;margin-right:16px}
+  .rank td.c-played::before{content:"as played ";color:var(--ter);font-size:12px}
+  .what,.next{max-width:none}
+  .whys{min-width:0}
+  .grid2{grid-template-columns:1fr}
+  .cause{padding:16px 18px}
+  .cause .h .share{margin-left:0;width:100%}
+  .pad{padding:18px}
+  .viewer .tools{padding:14px 16px}
+  .viewer .tools .seg{max-width:100%;overflow-x:auto;scrollbar-width:none}
+  .viewer .tools .seg::-webkit-scrollbar{display:none}
+  .viewer .tools .sp{display:none}
+  .strip{grid-template-columns:1fr 1fr;gap:10px}
+}
+
+/* Command comparison workspace */
+body{overflow-x:hidden}.wrap{max-width:none;padding:0;margin:0}
+.workspace{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:100vh}
+.stageside{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;border-right:1px solid var(--sep);background:var(--card)}
+.sidehead{padding:22px 18px 16px;border-bottom:1px solid var(--sep)}.sidehead h1{font-size:19px;letter-spacing:-.035em;line-height:1.2;margin:7px 0 14px}.sidehead .eyebrow{font-size:10px;margin:0}
+.sidehead label{font-size:12px;color:var(--sec);display:flex;align-items:center;gap:7px}.sidehead input{accent-color:var(--blue)}
+.stagelist{overflow:auto;flex:1;padding:8px}.stageitem{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:10px;border-radius:8px;color:inherit;text-decoration:none;border:1px solid transparent;margin-bottom:4px}
+.stageitem:hover{background:var(--fill)}.stageitem.on{background:var(--blue-t);border-color:var(--blue)}.stageitem img{width:64px;height:45px;object-fit:contain;background:#080909;border-radius:4px}.stageitem b{font-size:12px;display:block}.stageitem small{font-size:10px;color:var(--sec);display:block;margin-top:4px}.stageitem .rates{display:flex;gap:9px;font:10px var(--mono);margin-top:5px}.rates .wrong{color:var(--amber)}.rates .same{color:var(--green)}.sidefoot{padding:13px 18px;border-top:1px solid var(--sep);font-size:10px;color:var(--sec)}
+.workmain{min-width:0;padding:25px 28px 60px}.workheader{display:flex;gap:15px;align-items:flex-start;justify-content:space-between;margin-bottom:20px}.workheader h2{font-size:25px;letter-spacing:-.035em;margin:5px 0 6px}.workheader p{font-size:12px;color:var(--sec);margin:0}.workheader .eyebrow{font-size:10px}.commandnav{display:flex;gap:6px;flex-shrink:0}.commandnav button,.worktools button{padding:7px 11px;border:1px solid var(--sep);background:var(--card);border-radius:6px;color:var(--text);font-size:12px;cursor:pointer}.commandnav button:disabled{opacity:.3;cursor:default}
+.worktools{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:0 0 12px;font-size:12px;color:var(--sec)}.worktools label{display:flex;gap:6px;align-items:center}.worktools input{accent-color:var(--blue)}.worktools .help{margin-left:auto;font-size:11px}.comparegrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.comparecol{min-width:0;border:1px solid var(--sep);border-radius:10px;overflow:hidden;background:var(--card)}.colhead{min-height:62px;padding:12px;display:flex;justify-content:space-between;align-items:flex-start;gap:8px}.colhead b{display:block;font-size:14px}.colhead small{display:block;font-size:11px;color:var(--sec);margin-top:5px}.colhead select{font-size:11px;border:1px solid var(--sep);background:var(--fill);color:var(--text);padding:4px;border-radius:4px;max-width:125px}.colhead .score{color:var(--amber)}.colhead .pass{color:var(--green)}
+.syncview{aspect-ratio:var(--stage-ratio);overflow:auto;position:relative;background:#070909;cursor:crosshair;touch-action:none;overscroll-behavior:contain;scrollbar-width:thin}.syncview.dragging{cursor:grabbing}.imageplane{position:relative;transform-origin:0 0}.imageplane img{display:block;width:100%;max-width:none;height:auto;user-select:none;pointer-events:none}.cross{position:absolute;width:11px;height:11px;transform:translate(-50%,-50%);border:1px solid #fff;box-shadow:0 0 0 1px #000;pointer-events:none;border-radius:50%}.pendingcol{aspect-ratio:var(--stage-ratio);display:flex;align-items:center;justify-content:center;color:var(--sec);font-size:12px;background:var(--fill)}
+.worklegend{display:flex;gap:15px;flex-wrap:wrap;font-size:10px;color:var(--sec);margin:10px 0 15px}.worklegend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}.pixelpanel{padding:14px 16px;border:1px solid var(--sep);border-radius:9px;background:var(--card);margin-top:14px;font-size:12px}.pixelpanel .plain td,.pixelpanel .plain th{padding:7px 10px}.pixelpanel p{margin:0;color:var(--sec)}.pixelpanel .tbl{margin-top:10px}.pixelpanel .words td{font-size:11px}.findings{margin-top:24px}.findings h3{font-size:17px;margin:0 0 12px}.evidencegrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.evidencecard{padding:16px;border:1px solid var(--sep);border-radius:9px;background:var(--card)}.evidencecard h4{margin:0 0 8px;font-size:13px}.evidencecard p{font-size:12px;color:var(--sec);line-height:1.55;margin:5px 0 10px}.evidenceitem{border-top:1px solid var(--sep);padding-top:10px;margin-top:10px}.evidenceitem b{font-size:12px}.evidenceitem .badge{font-size:9px;margin-right:7px}.evidenceitem .nextstep{font-size:11px;color:var(--sec)}
+.technical{margin-top:20px;border-top:1px solid var(--sep);padding-top:14px}.technical summary{font-size:12px;color:var(--sec);cursor:pointer}.technical section{margin-top:20px}.technical h2{font-size:18px}.technical .grid2{gap:12px}.technical .gsub{font-size:12px}.emptylist{font-size:12px;color:var(--sec);padding:16px}.worknote{font-size:11px;color:var(--sec);margin:10px 0}
+@media(min-width:1600px){.workspace{grid-template-columns:285px minmax(0,1fr)}.workmain{padding:32px 36px}.syncview{max-height:65vh}}
+@media(max-width:1050px){.workspace{grid-template-columns:210px minmax(0,1fr)}.workmain{padding:20px 15px}.sidehead{padding:18px 12px}.stageitem{grid-template-columns:47px 1fr;padding:8px;gap:7px}.stageitem img{width:47px;height:36px}.colhead{display:block;min-height:82px}.colhead select{margin-top:6px}.worktools .help{margin-left:0}}
+@media(max-width:700px){.workspace{display:block}.stageside{position:relative;height:auto;border-right:0;border-bottom:1px solid var(--sep)}.sidehead{padding:14px 16px}.sidehead h1{margin:5px 0 8px}.stagelist{display:flex;overflow-x:auto;padding:7px;max-height:100px}.stageitem{flex:0 0 160px;margin:0 5px 0 0}.sidefoot{display:none}.workmain{padding:18px 12px}.comparegrid{grid-template-columns:1fr}.colhead{display:flex;min-height:58px}.syncview{max-height:60vh}.evidencegrid{grid-template-columns:1fr}.workheader h2{font-size:20px}.workheader .eyebrow{font-size:9px}}
+
+.commandicon{width:64px;height:45px;background:var(--fill);border-radius:4px;display:flex;align-items:center;justify-content:center;font:12px var(--mono);color:var(--ter)}.unmeasured{padding:25px;border:1px solid var(--sep);border-radius:10px;background:var(--card);margin-top:15px;max-width:850px}.unmeasured h3{font-size:19px;margin:0 0 10px}.unmeasured p{font-size:14px;line-height:1.65;color:var(--sec)}.nearby{display:flex;gap:15px;flex-wrap:wrap;margin-top:20px}.nearby a{font-size:13px;background:var(--blue-t);padding:10px 14px;border-radius:6px;text-decoration:none}@media(max-width:1050px){.commandicon{width:47px;height:36px}}
+.stageitem{height:80px;box-sizing:border-box}.commandsearch{display:block;width:100%;box-sizing:border-box;margin-top:12px;border:1px solid var(--sep);border-radius:6px;padding:8px 9px;background:var(--fill);color:var(--text);font-size:12px}
+
+/* Spacious single-image review */
+.workspace{grid-template-columns:242px minmax(0,1fr)}.workmain{padding:28px 36px 60px;max-width:1800px;width:100%;box-sizing:border-box}.sidehead h1{font-size:18px}.workheader{margin-bottom:18px}.workheader h2{font-size:25px;letter-spacing:-.035em}.workheader .eyebrow{color:var(--sec);letter-spacing:.03em;text-transform:none;font-size:12px}.stageitem{grid-template-columns:44px 1fr;gap:8px;padding:8px;height:80px}.stageitem img,.commandicon{width:44px;height:36px}.stageitem small{font-size:9px;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:155px;margin-top:3px}.stageitem .rates{display:block;font:9px/1.35 -apple-system,BlinkMacSystemFont,sans-serif;margin-top:4px}.stageitem .rates span{display:block}.stageitem .rates .wrong{color:var(--sec)}.stageitem .rates .same{color:var(--green)}.stageitem b{font-size:11px}.simplecontrols{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-bottom:14px}.simplecontrols .seg{background:var(--fill);padding:3px;border-radius:9px;border:0}.simplecontrols .seg button{border:0;padding:7px 14px;font-size:12px;border-radius:7px;white-space:nowrap}.simplecontrols .seg button.on{background:var(--card);color:var(--text);box-shadow:0 1px 4px rgba(0,0,0,.12)}.simplecontrols .seg button:disabled{opacity:.35;cursor:default}.buildchoice{font-size:12px;color:var(--sec)}.buildchoice select{border:1px solid var(--sep);background:var(--card);color:var(--text);border-radius:8px;padding:8px 10px;font-size:12px}.zoomcontrols{margin-left:auto}.largeviewer{overflow:hidden;border-radius:14px;background:#070909;box-shadow:0 1px 3px rgba(0,0,0,.08)}.largeviewer .stagebox{background:#070909;min-height:min(500px,60vh);max-height:78vh;line-height:0}.largeviewer .stagebox .layer{display:block;margin:0 auto;min-height:0}.largeviewer .stagebox img{image-rendering:auto}.largeviewer .handle:after{content:'↔';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:30px;height:38px;display:flex;align-items:center;justify-content:center;border-radius:15px;background:#fff;color:#333;font:18px/1 system-ui;box-shadow:0 2px 12px #0005}.largeviewer .tag{top:14px;background:#0007;backdrop-filter:blur(10px);font-size:11px;padding:6px 10px}.largepending{min-height:500px;display:flex;align-items:center;justify-content:center;color:#a1a1a6;font-size:14px}.viewcaption{display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap;margin:14px 2px 22px;font-size:12px;color:var(--sec);line-height:1.5}.viewcaption b{color:var(--text);font-weight:500}.quietdetails{padding:14px 0;border-top:1px solid var(--sep)}.quietdetails>summary,.technical>summary{font-size:12px;font-weight:500;cursor:pointer;color:var(--sec)}.quietdetails .findings{margin:20px 0}.quietdetails .insp{padding:15px 0}.technical{margin-top:0}.quietdetails .evidencegrid{grid-template-columns:1fr 1fr}.worknote{font-size:12px}
+@media(min-width:1600px){.workspace{grid-template-columns:250px minmax(0,1fr)}.workmain{padding:32px 48px}}
+@media(max-width:1050px){.workspace{grid-template-columns:220px minmax(0,1fr)}.workmain{padding:22px 20px}.simplecontrols{gap:8px}.simplecontrols .seg button{padding:7px 10px}.zoomcontrols{margin-left:0}}
+@media(max-width:700px){.workspace{display:block}.workmain{padding:18px 14px}.simplecontrols{gap:8px}.workheader h2{font-size:21px}.largeviewer .stagebox{min-height:260px;max-height:70vh}.quietdetails .evidencegrid{grid-template-columns:1fr}.viewcaption{font-size:11px}.stageitem{flex-basis:190px}.largepending{min-height:280px}.zoomcontrols{margin-left:auto}}
+
+.stageitem{height:64px;border-radius:5px;margin-bottom:4px}.stageitem small{margin-top:2px;font-size:9px}.stageitem .rates{margin-top:2px;font-size:9px;line-height:1.2}.largeviewer .stagebox{min-height:300px;height:60vh;max-height:60vh}.largeviewer .stagebox .layer{margin:0 auto}.simplecontrols .buildchoice small{font-size:12px}.quietdetails .quietdetails{padding-left:0}@media(max-width:700px){.largeviewer .stagebox{height:50vh;max-height:60vh;min-height:260px}}
+.baselineobservation{margin:0 2px 20px;font-size:12px;color:var(--sec);line-height:1.6}.baselineobservation p{margin:0 0 7px}.conciseconfidence{font-size:12px}.conciseconfidence .badge{font-size:9px;margin-right:5px}.evidencetitle{font-size:14px;margin:20px 0 4px}.technicalcontent{margin-top:20px}.technicalcontent section{margin-top:24px}.stageitem b{font-size:10px;white-space:nowrap}.viewcaption{margin-bottom:8px}
+.runselectors{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 14px}.runselectors label{font-size:11px;color:var(--sec);min-width:0}.runselectors select{display:block;margin-top:5px;width:100%;box-sizing:border-box;border:1px solid var(--sep);border-radius:8px;padding:9px;background:var(--card);color:var(--text);font-size:12px}.runselectors p{grid-column:1/-1;margin:0;font-size:11px;color:var(--sec)}.runsummary{font-size:12px;line-height:1.7;color:var(--sec);margin:12px 2px}.runsummary b{color:var(--text)}.runhistory{margin:24px 0}.runhistory h3{font-size:15px}.runhistory article{border-top:1px solid var(--sep);padding:12px 0;font-size:12px}.runhistory article>b,.runhistory article>span{display:block}.runhistory span,.runhistory p{color:var(--sec);margin:5px 0}@media(max-width:700px){.runselectors{grid-template-columns:1fr}}
+.exactscan{border:1px solid var(--sep);background:var(--card);color:var(--blue);font-size:11px;border-radius:6px;padding:5px 8px;cursor:pointer}.exactscan:disabled{opacity:.5;cursor:wait}.scanhelp{font-size:10px;color:var(--ter);margin-left:7px}
+.fixedreference{display:flex;flex-direction:column;justify-content:center;gap:5px;padding:8px 0;min-width:0}.fixedreference span,.fixedreference small{font-size:11px;color:var(--sec)}.fixedreference b{font-size:14px;font-weight:600}.primaryreference{align-items:center;grid-template-columns:minmax(150px,.4fr) 1fr}.patchprogress{border-top:1px solid var(--sep);margin-top:28px;padding-top:20px}.patchprogress h3{font-size:17px;margin:0 0 8px}.patchprogress>p{font-size:12px;color:var(--sec);line-height:1.6;margin:0 0 14px}.referenceheading{font-size:14px}@media(max-width:700px){.primaryreference{grid-template-columns:1fr}}
+</style></head><body>
+<div class="wrap" id="app"></div>
+<div class="tip" id="tip"></div>
+<script>
+const D=/*__DATA__*/null;
+const $=(s,r=document)=>r.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>Number(n).toLocaleString('en-US');
+const P=(n,d,dig=0)=>{if(!d)return '0%';const v=100*n/d;if(dig===0&&v>0&&v<1)return '<1%';if(dig===0&&v>99&&v<100)return '>99%';return v.toFixed(dig)+'%'};
+const PF=f=>P(f,1);
+const CONF={proven:'Proven',likely:'Likely',unknown:'Unknown',na:'Not comparable'};
+const STAGE={};D.stages.forEach(s=>STAGE[s.command]=s);
+const MODE={isolated:'Isolated replay',played:'As played'};
+const PRIMARY=D.primary;
+const areaHref=a=>D.coverage?`${D.coverage}#${a.id}`:`${D.areas_dir}/${a.id}.json`;
+const badge=c=>`<span class="badge b-${c}">${CONF[c]}</span>`;
+function name(c){const s=STAGE[c];return s?s.name:String(c)}
+function frameOf(c){return D.frames[STAGE[c].frame]}
+function otherShare(s,label){const st=s.backends[label].stats;return st.other_differing==null?null:st.other_differing/st.pixels}
+function topCause(s){const h=s.backends[PRIMARY].hypotheses;return h.length?h[0]:null}
+function rowState(r){return r.state}
+function rowConf(r){if(r.state==='identical')return 'identical';if(r.state==='na')return 'na';const h=topCause(STAGE[r.commands[0]]);return h?h.confidence:'unknown'}
+function range(vals){const lo=Math.min(...vals),hi=Math.max(...vals);const a=PF(lo),b=PF(hi);return a===b?a:`${a}–${b}`}
+function meter(f){return `<div class="meter"><div class="track"><i style="width:${Math.max(2,Math.round(f*100))}%"></i></div><span>${PF(f)}</span></div>`}
+
+/* Tooltip */
+const tip=$('#tip');
+document.addEventListener('mousemove',e=>{const t=e.target.closest('[data-tip]');if(!t){tip.style.opacity=0;return}
+  tip.textContent=t.dataset.tip;tip.style.opacity=1;const w=tip.offsetWidth;
+  tip.style.left=Math.min(innerWidth-w-8,e.clientX+12)+'px';tip.style.top=(e.clientY+14)+'px'});
+
+/* Overview */
+function overview(){
+  const rows=D.rows, differ=rows.filter(r=>r.state==='differs');
+  const nstages=D.stages.length, dstages=D.stages.filter(s=>s.backends[PRIMARY].stats.differing).length;
+  const counts={proven:0,likely:0,unknown:0,na:0,identical:0};rows.forEach(r=>counts[rowConf(r)]++);
+  const other=D.other_report?`<div class="seg">${['isolated','played'].map(m=>m===D.mode?`<a class="on">${MODE[m]}</a>`:`<a href="${esc(D.other_report)}">${MODE[m]}</a>`).join('')}</div>`:'';
+  const iso=D.mode==='isolated';
+  let h=`<div class="topbar"><div><p class="eyebrow">Console parity · ${MODE[D.mode]} · ${esc(PRIMARY)}</p>
+  <h1>${esc(D.title)}</h1>
+  <p class="sub">Where Xenia’s stages differ from the console’s, pass by pass: how much, why, how sure, and what to test next. ${iso?'Each pass was replayed with the console’s own output of every earlier pass in memory, so a row is that pass’s own difference, except through eDRAM, which isolation does not restore.':'Each pass was replayed from the trace as it is, so a difference may come from the passes before it; the isolated replay proves which.'}</p></div>${other}</div>
+  <div class="hero"><div class="big"><span class="n">${differ.length}</span><span class="t">of ${rows.length} passes differ from the console <span>· ${dstages} of ${nstages} stages</span></span></div>
+  <div class="bar">${['proven','likely','unknown','na','identical'].filter(k=>counts[k]).map(k=>`<i class="c-${k}" style="flex:${counts[k]}" data-tip="${counts[k]} ${k==='identical'?'identical':k==='na'?'not comparable':'led by a '+CONF[k].toLowerCase()+' cause'}"></i>`).join('')}</div>
+  <ul class="legend">${[['proven','Led by a proven cause'],['likely','Led by a likely cause'],['unknown','Cause unknown'],['na','Not comparable'],['identical','Identical']].map(([k,t])=>`<li><span class="dot c-${k}"></span><b>${counts[k]}</b>${t}</li>`).join('')}</ul>
+  <p class="note">A pass’s leading cause is the one covering most of its wrong pixels. Proven: a counterfactual replay puts the pixels right, or both sides kept an earlier pass’s eDRAM. Likely: the pattern and the pass’s registers match a console rule from the coverage map. Unknown: nothing tested explains it yet.</p></div>`;
+  h+=`<div class="meta"><span><b>Trace</b> ${esc(D.suite)} · ${fmt(D.commands)} commands · ${D.frames.length} frames</span><span><b>Console</b> run ${esc(D.run)}, ${esc(D.console_date)}</span><span><b>Backends</b> ${D.backends.map(b=>esc(b.label)).join(', ')}${D.variants.length?' + '+D.variants.map(v=>esc(v.label)).join(', '):''}</span><span><button onclick="document.getElementById('prov').scrollIntoView({behavior:'smooth'})">Builds and cvars</button></span></div>`;
+  h+=`<section><h2>Where Xenia goes wrong</h2><p class="gsub">${esc(PRIMARY)}, ranked by wrong pixels. A pass repeated in the next frame with the same outcome shares its row. Open a row for images, histograms, the pixel inspector and the pass’s draws.</p>
+  <div class="card tbl"><table class="rank"><thead><tr><th>Pass</th><th>Wrong</th><th>${iso?'As played':'Isolated'}</th><th>What differs</th><th>Why · how sure</th><th>Backends</th><th>Test that would settle it</th></tr></thead><tbody>`;
+  for(const r of rows.filter(r=>r.state!=='identical')){
+    const s=STAGE[r.commands[0]], b=s.backends[PRIMARY];
+    const others=r.commands.map(c=>otherShare(STAGE[c],PRIMARY)).filter(x=>x!=null);
+    const hy=b.hypotheses.filter((x,i)=>!i||x.share>=0.005).slice(0,3);
+    const nxt=(b.hypotheses.find(x=>x.confidence!=='proven'&&x.next)||b.hypotheses[0]||{}).next||'—';
+    const ag=s.agree;
+    h+=`<tr tabindex="0" data-go="#c${s.command}"><td class="pass"><b>${esc(r.name)}</b><small>${r.commands.map(c=>`${c} <span>${esc(frameOf(c).label)}</span>`).join(' · ')}</small></td>
+    <td class="num c-wrong">${r.state==='na'?'<span class="unk">—</span>':meter(r.wrong.reduce((a,b)=>Math.max(a,b)))}${r.commands.length>1&&range(r.wrong).includes('–')?`<div class="agree">${range(r.wrong)}</div>`:''}</td>
+    <td class="num played c-played">${others.length?range(others):'—'}</td>
+    <td class="what" title="${esc(b.observation)}">${esc(b.brief||b.observation)}</td>
+    <td><div class="whys">${hy.map(x=>`<div class="why">${badge(x.confidence)}<span>${esc(x.title)}</span><span class="pc">${PF(x.share)}</span></div>`).join('')}</div></td>
+    <td>${ag.agree?`<span class="agree">All ${D.backends.length} agree</span>`:`<span class="agree no">Differ<small>${ag.differ.map(d=>esc(d.label+': '+d.text)).join('; ')} (vs ${esc(ag.primary)})</small></span>`}</td>
+    <td class="next">${esc(nxt)}</td></tr>`;
+  }
+  const ident=rows.filter(r=>r.state==='identical');
+  h+=`</tbody></table>${ident.length?`<div class="tail">Identical to the console: ${ident.map(r=>`<a href="#c${r.commands[0]}">${esc(r.name)}</a> (${r.commands.join(' · ')})`).join(', ')}.</div>`:''}</div></section>`;
+  h+=`<section><h2>Passes by frame</h2><p class="gsub">Frames are bounded by recorded swap events, not GPU interrupts.</p><div class="frames">`;
+  D.frames.forEach((f,k)=>{const ss=D.stages.filter(s=>s.frame===k);
+    h+=`<div class="card pad frame"><h3>${esc(f.label)}</h3><div class="r">${esc(f.range)}</div><ul>${ss.map(s=>{const st=s.backends[PRIMARY].stats;return `<li><a href="#c${s.command}">${esc(s.name)}<span class="c">${s.command}</span></a><span class="w">${st.differing?PF(st.differing/st.pixels)+' wrong':'identical'}</span></li>`}).join('')}</ul></div>`});
+  h+=`</div></section>`;
+  h+=provenance();
+  h+=footer();
+  return h;
+}
+function provenance(){
+  const rows=[...D.backends.map(b=>({...b,kind:'backend'})),...D.variants.map(v=>({...v,kind:'variant'}))];
+  const u='<span class="unk">not recorded</span>';
+  return `<section id="prov"><h2>Builds and cvars</h2><p class="gsub">What is known of each replay, from the xenia_provenance.json run.py writes with each replay (since gpugen-port 9a5cf511f) or recorded backend identity files.</p>
+  <div class="card pad tbl"><table class="plain"><thead><tr><th>Replay</th><th>Verified build commit</th><th>Build tree</th><th>Trace dump</th><th>SHA-256</th><th>Cvars</th><th>GPU</th><th>Replayed</th></tr></thead><tbody>
+  ${rows.map(r=>{const p=r.provenance;return `<tr><td>${esc(r.label)}${r.kind==='variant'?`<div class="unk">${esc(r.change)}</div>`:''}</td><td class="mono">${p.build_source?.commit?esc(p.build_source.commit.slice(0,12)):u}</td><td>${p.build_source?.dirty==null?u:p.build_source.dirty?'<span class="warnchip">dirty</span>':'clean'}</td><td class="mono">${p.binary?esc(p.binary.split('/').slice(-2).join('/')):u}</td><td class="mono">${p.sha256?esc(p.sha256.slice(0,12)):u}</td><td class="mono">${p.cvars?esc(p.cvars):u}</td><td>${p.gpu?esc(p.gpu):u}</td><td class="n">${esc(p.replayed||'')}</td></tr>`}).join('')}
+  </tbody></table></div></section>`;
+}
+function footer(){
+  return `<footer><p>Steps are 1/255 of full scale for 8-bit channels, 1/1023 for 10-bit ones; depth differences are in units of 2⁻²⁴ (D24S8), floats in ULPs. Xenia high means Xenia’s numeric value is larger. Whether higher depth means nearer or farther depends on the depth convention.</p>
+  <p>A pixel the console “left” holds the target’s earlier word: an earlier pass’s eDRAM, the pass’s background word, or, where no console word matches anything Xenia wrote, whatever the target held. Not comparable: Xenia’s replays from eDRAM all 00 and all FF disagree there, so it shows eDRAM from before the trace.</p>
+  <p>Isolation (stage_isolate.py) puts each stage’s console output back in memory after its resolve; it restores memory, not eDRAM, so a pass drawing over an earlier pass’s eDRAM can still inherit its difference. Generated ${esc(D.generated)} by stage_report.py from run ${esc(D.run)}${D.coverage?` · causes link to the <a href="${esc(D.coverage)}">coverage map</a>`:''}.</p></footer>`;
+}
+
+/* Detail */
+let current=null;
+function detail(cmd){
+  const s=STAGE[cmd]; if(!s) return overview();
+  current={s,label:PRIMARY,view:'compare',pick:null};
+  const f=frameOf(cmd), b=s.backends[PRIMARY], st=b.stats;
+  const row=D.rows.find(r=>r.commands.includes(cmd));
+  const os=otherShare(s,PRIMARY);
+  let h=`<a class="back" href="#">‹ All passes</a><p class="eyebrow">${esc(f.label)} · command ${cmd} · ${MODE[D.mode]}</p><h1>${esc(s.name)}</h1>
+  <p class="sub">${esc(s.derived.detail)} · resolved to ${esc(s.dest_base)} as ${esc(s.format)}${s.named&&s.derived.name!==s.name?` · ${esc(s.derived.name)}`:''}</p>
+  ${row&&row.commands.length>1?`<div class="chips">${row.commands.map(c=>`<a class="chip ${c===cmd?'on':''}" href="#c${c}">${c} · ${esc(frameOf(c).label)}</a>`).join('')}</div>`:''}
+  <div class="strip"><div class="stat"><div class="n">${st.differing?PF(st.differing/st.pixels):'0%'}</div><div class="l">pixels wrong · ${fmt(st.differing)} of ${fmt(st.pixels)}</div></div>
+  <div class="stat"><div class="n">${os==null?'—':PF(os)}</div><div class="l">${D.mode==='isolated'?'as played':'isolated'} (${esc(PRIMARY)})</div></div>
+  <div class="stat"><div class="n">${s.agree.agree?'Agree':'Differ'}</div><div class="l">${s.agree.agree?`all ${D.backends.length} backends tell the same story`:s.agree.differ.map(d=>esc(d.label+': '+d.text)).join('; ')}</div></div>
+  <div class="stat"><div class="n">${s.draws}</div><div class="l">draws · ${s.hiz_tests} test hi-Z, ${s.his_tests} hi-S</div></div></div>`;
+  if(s.prior) h+=`<div class="note"><b>Draws over ${esc(s.prior.name)} (${s.prior.command}) in eDRAM.</b> ${D.mode==='isolated'?'Isolation restores memory, not eDRAM, so':'In every replay'} ${esc(s.prior.name)}’s difference can reach this pass through the pixels it leaves.</div>`;
+  h+=`<section><h2>Why</h2><p class="gsub">${esc(PRIMARY)}. Each cause with the share of the wrong pixels it accounts for; shares add up to 100%.</p><div class="card causes">${causes(b)}</div></section>`;
+  h+=`<section><h2>What differs</h2><p class="gsub">${esc(b.observation)}</p><div class="grid2"><div class="card pad">${split(st)}</div><div class="card pad">${histogram(s,st)}</div></div></section>`;
+  h+=`<section><h2>Pixels</h2><p class="gsub">Drag to compare the console with Xenia; click a pixel to inspect its words. The difference view marks Xenia high in red and low in blue, deeper for larger steps. ${esc(s.preview_note||'')}</p>
+  <div class="card viewer"><div class="tools"><div class="seg" id="bk">${Object.keys(s.backends).map(l=>`<button data-b="${esc(l)}" class="${l===PRIMARY?'on':''}">${esc(l)}</button>`).join('')}</div>
+  <div class="seg" id="vw">${[['compare','Compare'],['delta','Difference'],['console','Console'],['xenia','Xenia']].map(([k,t])=>`<button data-v="${k}" class="${k==='compare'?'on':''}">${t}</button>`).join('')}</div>
+  <span class="sp"></span><div class="seg" id="zm"><button data-z="fit" class="on">Fit</button><button data-z="1">1×</button><button data-z="2">2×</button></div></div>
+  <div class="stagebox" id="box"></div>
+  <div class="keys">${[['--hi','Xenia high'],['--lo','Xenia low'],['--extra','Console left it, Xenia drew'],['--missing','Console drew, Xenia left it'],['--edram','Both kept an earlier pass’s eDRAM'],['--pre','eDRAM from before the trace']].map(([v,t])=>`<span><i style="background:var(${v})"></i>${t}</span>`).join('')}</div>
+  <div class="insp" id="insp"><div class="empty">Click a pixel to see the console’s and every backend’s word there, decoded, with Xenia’s eDRAM-00 and -FF replays.</div></div></div></section>`;
+  h+=`<section><h2>Backends</h2><p class="gsub">How each replay compares. “Same as ${esc(PRIMARY)}” counts identical words.</p><div class="card pad tbl">${backends(s)}</div></section>`;
+  h+=`<section><h2>Draws</h2><p class="gsub">The ${s.draws===1?'draw':s.draws+' draws'} writing what this pass resolves (since the previous resolve), in runs of the same key state.${s.inputs.length?' They sample '+s.inputs.map(i=>`<a href="#c${i.command}">${esc(i.name)} (${i.command})</a>`).join(', ')+'.':' They sample no earlier stage.'}</p><div class="card pad tbl">${draws(s)}</div></section>`;
+  h+=footer();
+  return h;
+}
+function causes(b){
+  if(!b.hypotheses.length) return `<div class="cause"><p>Identical to the console.</p></div>`;
+  const col={proven:'var(--green-s)',likely:'var(--blue-s)',unknown:'var(--amber-s)',na:'var(--gray-s)'};
+  return b.hypotheses.map(x=>`<div class="cause"><div class="h">${badge(x.confidence)}<b>${esc(x.title)}</b><span class="share"><span class="track"><i style="width:${Math.max(1,x.share*100)}%;background:${col[x.confidence]}"></i></span>${PF(x.share)} · ${fmt(x.pixels)} px</span></div>
+  <p>${esc(x.text)}</p>${x.evidence?`<p class="ev">${esc(x.evidence)}</p>`:''}
+  ${x.suspects&&x.suspects.length?`<p class="ev">Suspects: ${x.suspects.map(z=>`<a href="${esc(areaHref(z.area))}">${esc(z.label)}</a>`).join(', ')}.</p>`:''}
+  <div class="ft">${x.area?`<span><b>Console rule</b> <a href="${esc(areaHref(x.area))}">${esc(x.area.title)}</a> · ${esc(x.area.status)}</span>`:''}${x.next?`<span><b>Next</b> ${esc(x.next)}</span>`:''}</div></div>`).join('');
+}
+function split(st){
+  const o=st.observation, d=st.differing;
+  if(!d) return '<p class="unk">No wrong pixels.</p>';
+  const parts=[['value','--text','Values differ'],['extra','--extra','Console left it, Xenia drew'],['missing','--missing','Console drew, Xenia left it'],['edram','--edram','Both kept an earlier pass’s eDRAM'],['pretrace','--pre','eDRAM from before the trace']].filter(p=>o[p[0]]);
+  return `<h3 style="margin:0;font-size:15px">Coverage or values</h3><div class="split">${parts.map(p=>`<i style="flex:${o[p[0]]};background:var(${p[1]})" data-tip="${esc(p[2])}: ${fmt(o[p[0]])} px (${P(o[p[0]],d)})"></i>`).join('')}</div>
+  <ul class="legend">${parts.map(p=>`<li><span class="dot" style="background:var(${p[1]})"></span><b>${P(o[p[0]],d)}</b>${esc(p[2])}</li>`).join('')}</ul>
+  ${o.extra?`<p class="ev" style="font-size:13px;color:var(--sec);margin:14px 0 0">${P(Math.round(st.extra_block_share*1000),1000)} of the pixels the console left lie in whole blocks (${fmt(st.extra_blocks)} blocks).</p>`:''}
+  ${st.local?`<p style="font-size:13px;color:var(--sec);margin:8px 0 0">All inside (${st.box[0]}, ${st.box[1]})–(${st.box[2]}, ${st.box[3]}).</p>`:''}`;
+}
+const STEP=['≤−16','−15…−4','−3','−2','−1','+1','+2','+3','+4…15','≥+16'];
+const LOGL=['≤−2¹⁶','−2¹⁶…−256','−255…−16','−15…−4','−3…−2','−1','+1','+2…3','+4…15','+16…255','+256…2¹⁶','≥+2¹⁶'];
+function histogram(s,st){
+  const chans=s.channels||(s.decode==='depth'?['Depth','Stencil']:s.decode==='float'?['Value']:['R','G','B','A']);
+  const logs=s.channel_logs||(s.decode==='depth'?[true,false]:s.decode==='float'?[true]:[false,false,false,false]);
+  if(!st.value_pixels) return `<h3 style="margin:0;font-size:15px">Signed steps</h3><p class="unk">No value differences: every wrong pixel is a coverage difference.</p>`;
+  let h=`<h3 style="margin:0;font-size:15px">Signed steps, per channel</h3><div class="hist">`;
+  chans.forEach((c,k)=>{const hist=st.histogram[k]; if(!hist) return; const tot=hist.reduce((a,b)=>a+b,0); if(!tot) return;
+    const labels=logs[k]?LOGL:STEP, half=labels.length/2, m=Math.max(...hist);
+    h+=`<div class="hrow"><div class="lab"><span>${c}</span><span>${fmt(tot)} wrong · <span class="lo">${P(st.low[k],tot)} low</span> · <span class="hi">${P(st.high[k],tot)} high</span></span></div>
+    <div class="bars">${hist.map((v,i)=>`<i class="${i<half?'neg':'pos'}" style="height:${v?Math.max(2,62*v/m):0}px" data-tip="${c} ${labels[i]}: ${fmt(v)} (${P(v,tot,1)})"></i>`).join('')}</div>
+    <div class="ticks">${labels.map(l=>`<span>${l}</span>`).join('')}</div></div>`});
+  return h+`</div>`;
+}
+function backends(s){
+  const labels=Object.keys(s.backends);
+  return `<table class="plain"><thead><tr><th>Replay</th><th>Wrong</th><th>${D.mode==='isolated'?'As played':'Isolated'}</th><th>Values</th><th>Console left</th><th>Console drew</th><th>eDRAM kept</th><th>Pre-trace</th><th>Direction</th><th>Same as ${esc(PRIMARY)}</th><th>Leading cause</th></tr></thead><tbody>${labels.map(l=>{const b=s.backends[l],st=b.stats,o=st.observation,d=st.differing||1;const h=b.hypotheses[0];
+    return `<tr><td>${esc(l)}${b.variant?`<div class="unk">variant of ${esc(b.variant_of)}</div>`:''}</td><td class="n">${PF(st.differing/st.pixels)}</td><td class="n">${st.other_differing==null?'—':PF(st.other_differing/st.pixels)}</td><td class="n">${P(o.value||0,d)}</td><td class="n">${P(o.extra||0,d)}</td><td class="n">${P(o.missing||0,d)}</td><td class="n">${P(o.edram||0,d)}</td><td class="n">${P(o.pretrace||0,d)}</td><td class="n">${b.direction[1]?PF(b.direction[0])+' '+b.direction[1]:'—'}</td><td class="n">${st.match_primary==null?'—':PF(st.match_primary/st.pixels)}</td><td>${h?badge(h.confidence)+' '+esc(h.title):'—'}</td></tr>`}).join('')}</tbody></table>`;
+}
+function draws(s){
+  if(!s.groups.length) return '<p class="unk">No draws write this target since the previous resolve.</p>';
+  return `<table class="plain"><thead><tr><th>Commands</th><th>Draws</th><th>Primitives</th><th>RB_HIZCONTROL</th><th>Depth / stencil</th><th>Blend</th><th>Targets</th><th>MSAA</th><th>Other</th></tr></thead><tbody>${s.groups.map(g=>{const t=g.state;
+  return `<tr><td class="n">${g.first===g.last?g.first:g.first+'–'+g.last}</td><td class="n">${g.draws}</td><td>${esc(g.prims)} · ${fmt(g.vertices)} idx${g.textured?` · ${g.textured} textured`:''}</td><td><span class="mono">${esc(t.hiz)}</span><div class="unk">${esc(t.hiz_text)}</div></td><td><span class="mono">${esc(t.depth)}</span><div class="unk">${esc(t.depth_text)}</div>${t.stencil?`<div class="unk mono">ref/mask ${esc(t.stencil)}</div>`:''}</td><td><span class="mono">${esc(t.blend)}</span><div class="unk">${esc(t.blend_text)}</div></td><td>${esc(t.targets)}<div class="unk">mask ${esc(t.mask)}</div></td><td class="n">${t.msaa}×<div class="unk">pitch ${t.pitch}, hi-Z pitch ${t.hiz_pitch}</div></td><td>${[t.alpha,t.cull!=='none'?'cull '+t.cull:''].filter(Boolean).map(esc).join(' · ')||'<span class="unk">—</span>'}</td></tr>`}).join('')}</tbody></table>`;
+}
+
+/* Viewer */
+let zoom='fit', split_=50;
+function img(src){return `<img src="${esc(src)}" alt="" draggable="false" loading="lazy">`}
+function drawViewer(){
+  const {s,label,view}=current, b=s.backends[label], box=$('#box'); if(!box) return;
+  const w=zoom==='fit'?Math.min(box.clientWidth,Math.max(300,innerHeight*.60)*s.width/s.height)+'px':(s.width*Number(zoom))+'px';
+  let inner='';
+  if(view==='compare') inner=`${img(s.console_image)}<img class="top" src="${esc(b.images.image)}" alt="" draggable="false" style="clip-path:inset(0 0 0 ${split_}%)"><div class="handle" style="left:${split_}%"></div><span class="tag" style="left:8px">Xbox 360 · reference</span><span class="tag" style="right:8px">${esc(label)}</span>`;
+  else if(view==='delta') inner=img(b.images.delta)+`<span class="tag" style="left:8px">${esc(runName(runRecord(label)))} − Xbox 360</span>`;
+  else if(view==='console') inner=img(s.console_image);
+  else inner=img(b.images.image);
+  box.innerHTML=`<div class="layer" style="width:${w};aspect-ratio:${s.width}/${s.height}">${inner}${current.pick?`<div class="mark" style="left:${(current.pick[0]+.5)/s.width*100}%;top:${(current.pick[1]+.5)/s.height*100}%"></div>`:''}</div>`;
+}
+function bindViewer(){
+  const box=$('#box'); if(!box) return;
+  drawViewer();
+  $('#bk').onclick=e=>{const t=e.target.closest('button');if(!t)return;current.label=t.dataset.b;[...$('#bk').children].forEach(x=>x.classList.toggle('on',x===t));drawViewer();if(current.pick)inspect(...current.pick)};
+  $('#vw').onclick=e=>{const t=e.target.closest('button');if(!t)return;current.view=t.dataset.v;[...$('#vw').children].forEach(x=>x.classList.toggle('on',x===t));drawViewer()};
+  $('#zm').onclick=e=>{const t=e.target.closest('button');if(!t)return;zoom=t.dataset.z;[...$('#zm').children].forEach(x=>x.classList.toggle('on',x===t));drawViewer()};
+  box.addEventListener('mousedown',e=>{V.drag=current.view==='compare';V.moved=false;V.sx=e.clientX;e.preventDefault()});
+  box.addEventListener('touchmove',e=>{if(current.view!=='compare')return;V.moved=true;slide(e.touches[0]);e.preventDefault()},{passive:false});
+  box.addEventListener('touchend',()=>{setTimeout(()=>{V.moved=false},0)});
+  box.addEventListener('click',e=>{if(V.moved){V.moved=false;return}const [fx,fy]=boxPos(e);const x=Math.floor(fx*current.s.width),y=Math.floor(fy*current.s.height);if(x<0||y<0||x>=current.s.width||y>=current.s.height)return;current.pick=[x,y];drawViewer();inspect(x,y)});
+}
+const V={drag:false,moved:false,sx:0};
+function boxPos(e){const l=$('#box .layer').getBoundingClientRect();return [(e.clientX-l.left)/l.width,(e.clientY-l.top)/l.height]}
+function slide(e){split_=Math.max(0,Math.min(100,boxPos(e)[0]*100));const top=$('#box img.top'),hd=$('#box .handle');if(top)top.style.clipPath=`inset(0 0 0 ${split_}%)`;if(hd)hd.style.left=split_+'%'}
+addEventListener('mousemove',e=>{if(!V.drag)return;if(Math.abs(e.clientX-V.sx)>3)V.moved=true;if(V.moved)slide(e)});
+addEventListener('mouseup',()=>{V.drag=false});
+
+/* Pixel data */
+const DATA={}, waiting={};
+window.__stageData=async(cmd,obj)=>{
+  const dec=async b64=>{if(!b64)return null;const wide=/^w(8|16):/.exec(b64);if(wide)b64=b64.slice(wide[0].length);const planes=b64.startsWith('s:');if(planes)b64=b64.slice(2);
+    const bin=Uint8Array.from(atob(b64),c=>c.charCodeAt(0));
+    let buf=new Uint8Array(await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('deflate'))).arrayBuffer());
+    if(planes){const n=buf.length>>2,out=new Uint8Array(buf.length);for(let k=0;k<4;k++)for(let i=0;i<n;i++)out[4*i+k]=buf[k*n+i];buf=out}
+    if(wide){const bytes=Number(wide[1]),out=[];for(let i=0;i<buf.length;i+=bytes){let v=0n;for(let j=bytes-1;j>=0;j--)v=(v<<8n)|BigInt(buf[i+j]);out.push(v)}return out}
+    return new Uint32Array(buf.buffer)};
+  const out={w:obj.w,h:obj.h,console:await dec(obj.console),backends:{}};
+  for(const [l,v] of Object.entries(obj.backends)){const m=await dec(v.main),main=m.map((x,i)=>x^out.console[i]);
+    const lo=await dec(v.low),hi=await dec(v.high);out.backends[l]={main,low:lo&&lo.map((x,i)=>x^main[i]),high:hi&&hi.map((x,i)=>x^main[i])}}
+  DATA[cmd]=out;(waiting[cmd]||[]).forEach(f=>f());delete waiting[cmd];
+};
+function load(s){return new Promise((res,rej)=>{if(DATA[s.command])return res(DATA[s.command]);(waiting[s.command]=waiting[s.command]||[]).push(error=>error?rej(error):res(DATA[s.command]));
+  if(waiting[s.command].length===1){const sc=document.createElement('script');sc.src=s.data;sc.onerror=()=>{const error=new Error('Could not load '+s.data);(waiting[s.command]||[]).forEach(f=>f(error));delete waiting[s.command]};document.body.appendChild(sc)}})}
+const hex=(v,bytes=4)=>typeof v==='bigint'?v.toString(16).toUpperCase().padStart(bytes*2,'0'):(v>>>0).toString(16).toUpperCase().padStart(bytes*2,'0');
+function f32(v){const b=new DataView(new ArrayBuffer(4));b.setUint32(0,v);return b.getFloat32(0)}
+function components(s,v){
+  const bits=s.component_bits||32,n=s.component_count||1,mask=(1n<<BigInt(bits))-1n,b=typeof v==='bigint'?v:BigInt(v>>>0);
+  return Array.from({length:n},(_,i)=>Number((b>>BigInt(i*bits))&mask));
+}
+function half(v){const sign=v&32768?-1:1,e=v>>>10&31,m=v&1023;return e===31?(m?NaN:sign*Infinity):sign*(e?1+m/1024:m/1024)*2**(e?e-15:-14)}
+function depthFloat(v){const d=v>>>8,e=d>>>20,m=d&0xfffff;return e?(1+m/1048576)*2**(e-15):m*2**-34}
+function decode(s,v){
+  if(s.decode==='depth-float')return `depth ${depthFloat(v).toPrecision(8)} (float20e4 bits ${(v>>>8).toString(16).toUpperCase()}) · stencil ${v&255}`;
+  if(s.decode==='depth')return `depth ${(v>>>8)} (${((v>>>8)/16777215).toFixed(7)}) · stencil ${v&255}`;
+  if(s.decode==='8888')return `R ${v>>>16&255} G ${v>>>8&255} B ${v&255} A ${v>>>24}`;
+  if(s.decode==='2101010')return `R ${v>>>20&1023} G ${v>>>10&1023} B ${v&1023} A ${v>>>30}`;
+  if(s.decode==='float'){const f=f32(v);return Number.isFinite(f)?f.toPrecision(7):String(f)}
+  const values=components(s,v).map(v=>s.floating?(s.component_bits===16?half(v):f32(v)):(s.number_format===1||s.number_format===3)&&v>=2**(s.component_bits-1)?v-2**s.component_bits:v);
+  return values.map((v,i)=>(s.channels||['R','G','B','A'])[i]+' '+(s.floating&&Number.isFinite(v)?v.toPrecision(7):String(v))).join(' · ');
+}
+function ord(v){v>>>=0;return v<0x80000000?v:0x80000000-v}
+function delta(s,c,b){
+  const sg=d=>d?`<span class="${d>0?'hi':'lo'}">${d>0?'+':''}${d}</span>`:'0';
+  if(c===b)return '<span class="unk">same</span>';
+  if(s.decode==='depth-float')return `Δ depth ${sg((b>>>8)-(c>>>8))} encoded steps, stencil ${sg((b&255)-(c&255))}`;
+  if(s.decode==='depth')return `Δ depth ${sg((b>>>8)-(c>>>8))}, stencil ${sg((b&255)-(c&255))}`;
+  if(s.decode==='8888')return [16,8,0,24].map((sh,k)=>'RGBA'[k]+' '+sg((b>>>sh&255)-(c>>>sh&255))).join(' ');
+  if(s.decode==='2101010')return [[20,1023],[10,1023],[0,1023],[30,3]].map(([sh,m],k)=>'RGBA'[k]+' '+sg((b>>>sh&m)-(c>>>sh&m))).join(' ');
+  if(s.decode==='float')return 'Δ '+sg(ord(b)-ord(c))+' ULP';
+  const cv=components(s,c),bv=components(s,b),bits=s.component_bits,sign=2**(bits-1);
+  const order=v=>v<sign?v:sign-v;
+  const signed=v=>(s.number_format===1||s.number_format===3)&&v>=sign?v-2**bits:v;
+  return cv.map((v,i)=>(s.channels||['R','G','B','A'])[i]+' '+sg(s.floating?order(bv[i])-order(v):signed(bv[i])-signed(v))).join(' ')+(s.floating?' ULP':' steps');
+}
+function loupe(src,x,y,s,cap){const z=6,size=132,cx=x*z+z/2,cy=y*z+z/2;
+  return `<div class="loupe"><div style="background-image:url('${esc(src)}');background-size:${s.width*z}px ${s.height*z}px;background-position:${size/2-cx}px ${size/2-cy}px"></div><small>${esc(cap)}</small></div>`}
+async function inspect(x,y){
+  const s=current.s, el=$('#insp'), b=s.backends[current.label]||Object.values(s.backends)[0];
+  el.innerHTML=`<div class="loupes">${loupe(s.console_image,x,y,s,'Console')}${loupe(b.images.image,x,y,s,current.label)}${loupe(b.images.delta,x,y,s,'Difference')}</div><div class="empty">Loading pixel data…</div>`;
+  const d=await load(s); if(current.s!==s) return;
+  const i=y*s.width+x, c=d.console[i];
+  let rows=`<tr><td>Console</td><td>${hex(c,s.pixel_bytes)}</td><td class="d">${esc(decode(s,c))}</td><td></td><td></td></tr>`;
+  for(const [l,v] of Object.entries(d.backends)){const w=v.main[i];const lo=v.low&&v.low[i],hi=v.high&&v.high[i];
+    const pre=v.low&&lo!==hi;
+    rows+=`<tr><td>${esc(l)}</td><td>${hex(w,s.pixel_bytes)}</td><td class="d">${esc(decode(s,w))}<div>${delta(s,c,w)}</div></td><td>${v.low?hex(lo,s.pixel_bytes):'—'}<br>${v.high?hex(hi,s.pixel_bytes):'—'}</td><td>${pre?'<span class="warnchip">pre-trace</span>':''}</td></tr>`}
+  el.innerHTML=el.querySelector('.loupes').outerHTML+`<div style="font-size:14px;margin-bottom:8px"><b>Pixel (${x}, ${y})</b> <span class="unk">· word ${fmt(i)}</span></div>
+  <div class="tbl"><table class="plain words"><thead><tr><th>Replay</th><th>Word</th><th>Decoded</th><th>eDRAM-00 / -FF</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+/* One-page command workspace. Full-width raw data loading above is shared. */
+const W={family:(D.primary||'').startsWith('Vulkan')&&backendBase('Vulkan')?'Vulkan':backendBase('Metal')?'Metal':backendBase('Vulkan')?'Vulkan':'Xbox',view:'compare',query:'',listStart:0,onlyDifferences:false,highlight:false,zoom:1,panX:0,panY:0,pick:null,selected:{...(D.selected_runs||{})},comparison:{...(D.comparison_runs||{})},command:null,runToken:0};
+const orderedStages=[...D.stages].sort((a,b)=>a.command-b.command);
+const timeline=(D.command_timeline||orderedStages.map(s=>({command:s.command,measured:true,name:s.name}))).slice().sort((a,b)=>a.command-b.command);
+const COMMAND={};timeline.forEach(c=>COMMAND[c.command]=c);
+function backendBase(family){return (D.backends.find(b=>b.label.toLowerCase().includes(family.toLowerCase()))||{}).label}
+const families=['Metal','Vulkan'];
+function runsFor(family){const base=backendBase(family);if(!base)return [];const all=[...D.backends,...D.variants];const labels=new Set([base]);let changed=true;while(changed){changed=false;for(const r of D.variants)if(labels.has(r.of)&&!labels.has(r.label)){labels.add(r.label);changed=true}}return all.filter(r=>labels.has(r.label))}
+function resolveRunLabel(family,id){return (runsFor(family).find(r=>r.label===id||r.run_id===id)||{}).label||backendBase(family)}
+function selectedLabel(family){return resolveRunLabel(family,W.selected[family])}
+function comparisonLabel(family){return resolveRunLabel(family,W.comparison[family])}
+function runRecord(label){return [...D.backends,...D.variants].find(r=>r.label===label)||{label}}
+function runName(r){return r.name||r.label}
+function buildIdentity(r){const p=r.provenance||{},source=p.build_source||{},patches=r.patches||source.patches||[],binary=p.sha256?`binary ${p.sha256.slice(0,12)}`:'';if(!source.commit)return binary||'Build identity not recorded';if(source.dirty||patches.length)return `${source.commit.slice(0,12)} + ${patches.length?patches.length+' uncommitted patch'+(patches.length===1?'':'es'):'uncommitted changes'}${binary?' · '+binary:''}`;return `Commit ${source.commit.slice(0,12)}`}
+
+function runSelect(family,id,label,selected){return `<label>${esc(label)}<select id="${id}" aria-label="${esc(label)}">${runsFor(family).map(r=>`<option value="${esc(r.label)}" ${r.label===selected?'selected':''}>${esc(runName(r))} · ${esc(buildIdentity(r))}</option>`).join('')}</select></label>`}
+function runSelectors(family){if(family==='Xbox')return '<p class="referenceheading">Xbox 360 · captured console reference</p>';return `<div class="runselectors primaryreference"><div class="fixedreference"><span>Reference</span><b>Xbox 360</b><small>Captured console output · fixed</small></div>${runSelect(family,'selected-run',`Compare Xbox 360 with this ${family} run`,selectedLabel(family))}</div>`}
+function progressSelector(family){return `<section class="patchprogress"><h3>Progress between ${family} runs</h3><p>Both runs are measured against the same Xbox 360 capture. This section does not change the image reference.</p><div class="runselectors">${runSelect(family,'comparison-run','Earlier run',comparisonLabel(family))}<div class="fixedreference"><span>Run shown above</span><b>${esc(runName(runRecord(selectedLabel(family))))}</b><small>${esc(buildIdentity(runRecord(selectedLabel(family))))}</small></div></div>`}
+
+function deltaCount(s,family){const a=s.backends[selectedLabel(family)],b=s.backends[comparisonLabel(family)];return a&&b?a.stats.differing-b.stats.differing:null}
+function deltaText(delta){return delta<0?`${fmt(-delta)} fewer differing pixels`:delta>0?`${fmt(delta)} more differing pixels`:'same differing-pixel count'}
+function runSeverity(s,a,b){const parts=[],ao=a.observation||{},bo=b.observation||{};for(const [key,label] of [['missing','Missing coverage'],['extra','Extra coverage']])if(Number.isFinite(ao[key])&&Number.isFinite(bo[key]))parts.push(`${label}: ${fmt(bo[key])} → ${fmt(ao[key])} pixels`);if(a.value_pixels&&b.value_pixels)parts.push(`Value-error median: ${fmt(b.median)} → ${fmt(a.median)}; 99th percentile: ${fmt(b.p99)} → ${fmt(a.p99)} ${magnitudeUnit(s)}`);if(s.decode==='depth'||s.decode==='depth-float'){const x=a.channel_pixels?.[1],y=b.channel_pixels?.[1];if(Number.isFinite(x)&&Number.isFinite(y))parts.push(`Stencil value differences: ${fmt(y)} → ${fmt(x)} pixels`)}return parts.length?`<p class="runseverity">${parts.map(esc).join(' · ')}. Earlier run → run shown above; errors relative to Xbox 360.</p>`:''}
+function comparisonSummary(s,family){if(family==='Xbox')return '';const selected=selectedLabel(family),comparison=comparisonLabel(family),a=s.backends[selected],b=s.backends[comparison];if(!a||!b)return '<p class="runsummary">Both named runs need recorded results at this command before changes can be compared.</p>';const d=deltaCount(s,family);return `${progressSelector(family)}<div class="runsummary"><b>${d<0?'More pixels match Xbox':d>0?'Fewer pixels match Xbox':'Same number of matching pixels'}:</b> ${esc(deltaText(d))} relative to ${esc(runName(runRecord(comparison)))}.${selected!==comparison?runSeverity(s,a.stats,b.stats):''}<div id="exact-run-delta">${selected===comparison?'Same run selected; no output change.':'Checking exact newly matching and newly broken pixels…'}</div><div id="first-affected">${selected===comparison?'No affected command.':'Comparing recorded error counts…'}</div></div></section>`}
+function patchName(p){return typeof p==='string'?p:p.title||p.name||p.commit||JSON.stringify(p)}
+function runHistory(family){if(family==='Xbox')return '';return `<section class="runhistory"><h3>Recorded run history · ${family}</h3>${runsFor(family).map(r=>{const p=r.provenance||{},source=p.build_source||{},patches=r.patches||source.patches||[];const parent=r.parent_run&&[...D.backends,...D.variants].find(x=>x.run_id===r.parent_run||x.label===r.parent_run);return `<article><b>${esc(runName(r))}</b><span>${esc(buildIdentity(r))}${r.run_id?' · run '+esc(r.run_id):''}</span>${r.parent_run?`<p>Parent run: ${esc(parent?runName(parent):r.parent_run)}</p>`:''}${r.change?`<p>${esc(r.change)}</p>`:''}<p>Cumulative patches: ${patches.length?patches.map(p=>esc(patchName(p))).join(' · '):(source.dirty===false?'None (clean build)':'not recorded')}</p></article>`}).join('')}</section>`}
+
+function hasDifference(s){return families.some(f=>{const b=s.backends[selectedLabel(f)];return b&&b.stats.differing>0})}
+function stageRate(s,f){const b=s.backends[selectedLabel(f)];return b?`<span class="${b.stats.differing?'wrong':'same'}" title="${esc(runName(runRecord(selectedLabel(f))))}">${f}: ${P(b.stats.differing,b.stats.pixels,1)} differ from Xbox</span>`:`<span>${f}: pending</span>`}
+function filteredTimeline(){const q=W.query.trim().toLowerCase();return timeline.filter(c=>STAGE[c.command]&&(!W.onlyDifferences||(STAGE[c.command]&&hasDifference(STAGE[c.command]))||c.command===W.command)&&(!q||String(c.command).includes(q)||String(c.name||'').toLowerCase().includes(q)||String(c.primitive||'').toLowerCase().includes(q)))}
+function stageList(){const all=filteredTimeline(),virtual=innerWidth>700&&all.length>150,start=virtual?Math.min(W.listStart,Math.max(0,all.length-1)):0,list=virtual?all.slice(start,start+60):all;const top=virtual?`<div style="height:${start*68}px" aria-hidden="true"></div>`:'',bottom=virtual?`<div style="height:${Math.max(0,all.length-start-list.length)*68}px" aria-hidden="true"></div>`:'';return list.length?top+list.map(c=>{const s=STAGE[c.command];return `<a class="stageitem ${c.command===W.command?'on':''}" href="#c${c.command}" data-stage="${c.command}">${s?`<img src="${esc(s.console_image)}" loading="lazy" alt="">`:`<div class="commandicon">${c.command}</div>`}<div><b>Command ${c.command}</b><small>${esc(s?s.name:c.name||c.primitive||'Draw command')}</small>${s?`<div class="rates">${families.map(f=>stageRate(s,f)).join('')}</div>`:'<small>No console snapshot</small>'}</div></a>`}).join('')+bottom:'<div class="emptylist">No commands match this filter.</div>'}
+function optionsFor(family,s){return `<small>${esc(runName(runRecord(selectedLabel(family))))} · ${esc(buildIdentity(runRecord(selectedLabel(family))))}</small>`}
+function pane(s,family){const consolePane=family==='Xbox 360';const label=consolePane?null:selectedLabel(family),b=label&&s.backends[label];const source=consolePane?s.console_image:b?(W.highlight?b.images.delta:b.images.image):null;const st=b&&b.stats;return `<div class="comparecol"><div class="colhead"><div><b>${family}</b>${consolePane?'<small>Live console reference</small>':st?`<small class="${st.differing?'score':'pass'}">${P(st.differing,st.pixels,2)} different · ${fmt(st.differing)} pixels</small>`:'<small>Replay result pending</small>'}</div>${consolePane?'':optionsFor(family,s)}</div>${source?`<div class="syncview" data-family="${family}" style="--stage-ratio:${s.width}/${s.height}"><div class="imageplane" style="width:${W.zoom*100}%"><img src="${esc(source)}" alt="${family}, command ${s.command}" draggable="false">${W.pick?`<i class="cross" style="left:${(W.pick.x+.5)/s.width*100}%;top:${(W.pick.y+.5)/s.height*100}%"></i>`:''}</div></div>`:`<div class="pendingcol" style="--stage-ratio:${s.width}/${s.height}">Not available yet — not a pass</div>`}</div>`}
+function evidence(s){return `<section class="findings"><h3>What we know at this command</h3><div class="evidencegrid">${families.map(f=>{const b=s.backends[selectedLabel(f)];if(!b)return `<article class="evidencecard"><h4>${f}</h4><p>No result yet. No conclusion about correctness.</p></article>`;return `<article class="evidencecard"><h4>${f}${selectedLabel(f)!==backendBase(f)?' · '+esc(runName(runRecord(selectedLabel(f)))):''}</h4><p>${esc(b.observation||b.brief)}</p>${b.hypotheses.length?b.hypotheses.slice(0,3).map(h=>`<div class="evidenceitem">${badge(h.confidence)}<b>${esc(h.title)}</b><p>${esc(h.text)}</p>${h.evidence?`<p>${esc(h.evidence)}</p>`:''}${h.next&&h.confidence!=='proven'?`<div class="nextstep"><b>Next test:</b> ${esc(h.next)}</div>`:''}</div>`).join(''):'<p>All compared pixels match the console. This does not establish correctness outside this captured stage.</p>'}</article>`}).join('')}</div></section>`}
+function technical(s){return `<section class="technicalcontent"><p class="worknote">${esc(s.derived.detail)} · ${esc(s.format)} · ${s.width} × ${s.height} · destination ${esc(s.dest_base)}. ${esc(s.preview_note||'')}</p>${D.other_report?`<p class="worknote"><a href="${esc(D.other_report)}#c${s.command}">Open ${D.mode==='played'?'isolated':'ordinary'} diagnostic replay at this command</a>. Isolation restores resolved memory, not eDRAM.</p>`:''}<div class="grid2">${families.map(f=>{const b=s.backends[selectedLabel(f)];return b?`<div class="card pad"><h3>${f}</h3>${split(b.stats)}${histogram(s,b.stats)}</div>`:''}).join('')}</div><section><h2>Draws writing this stage</h2><div class="card pad tbl">${draws(s)}</div></section>${provenance()}${footer()}</section>`}
+function magnitudeUnit(s){if(s.decode==='depth-float')return 'float20e4 encoded steps';if(s.decode==='depth')return 'depth code steps (1 / 16,777,215)';if(s.floating||s.decode==='float')return 'ULPs';if(s.decode==='8888')return '8-bit channel steps (1/255)';if(s.decode==='2101010')return 'channel code steps (RGB: 1/1023, alpha: 1/3)';if(s.number_format===2||s.number_format===3)return 'integer steps';return `${s.component_bits||8}-bit channel steps`}
+function conciseObservation(s,family){if(family==='Xbox')return '<p class="baselineobservation">Console reference. Select Metal or Vulkan to compare the same command.</p>';const b=s.backends[selectedLabel(family)];if(!b)return `<p class="baselineobservation">${family} has no result at this command yet; it is not counted as a pass.</p>`;const st=b.stats;let magnitude=st.value_pixels?`Among value differences: median ${fmt(st.median)}; 99th percentile ${fmt(st.p99)} ${magnitudeUnit(s)}.`:st.differing?'The recorded differences are coverage or initial-state differences; no value-error magnitude is available.':'All captured pixel bits match.';const h=b.hypotheses.find(h=>h.key!=='variant');const finding=h?`<span class="conciseconfidence">${badge(h.confidence)} ${esc(h.title)}${h.confidence==='unknown'?' — cause not established.':'.'}</span>`:'';return `<div class="baselineobservation"><p>${esc(magnitude)}</p>${finding}</div>`}
+function workspace(s){const i=orderedStages.findIndex(c=>c.command===s.command),family=W.family,label=selectedLabel(family),b=s.backends[label],isConsole=family==='Xbox',st=b&&b.stats;return `<div class="workspace"><aside class="stageside"><div class="sidehead"><p class="eyebrow">Console comparison</p><h1>${esc(D.title)}</h1><label><input type="checkbox" id="diffonly" ${W.onlyDifferences?'checked':''}>Measured differences only</label><input class="commandsearch" id="commandsearch" type="search" placeholder="Find a command" aria-label="Find command or primitive" value="${esc(W.query)}"></div><nav class="stagelist" id="stagelist" aria-label="Measured comparison commands">${stageList()}</nav><div class="sidefoot">${D.stages.length} measured commands<br>Contributing commands are in technical evidence.</div></aside><main class="workmain"><header class="workheader"><div><p class="eyebrow">Command ${s.command}</p><h2>${esc(s.name)}</h2><p class="worknote">${esc(s.derived.detail)}${s.groups.length?` · contributing draws ${Math.min(...s.groups.map(g=>g.first))}–${Math.max(...s.groups.map(g=>g.last))}`:''} · resolve command ${s.command}</p></div><div class="commandnav"><button data-step="-1" ${i===0?'disabled':''} aria-label="Previous command">←</button><button data-step="1" ${i===orderedStages.length-1?'disabled':''} aria-label="Next command">→</button></div></header><div class="simplecontrols"><div class="seg" id="family">${['Xbox','Metal','Vulkan'].map(f=>`<button data-family="${f}" class="${family===f?'on':''}">${f}</button>`).join('')}</div><div class="seg" id="displaymode"><button data-mode="compare" class="${!isConsole&&W.view==='compare'?'on':''}" ${isConsole?'disabled':''}>Wipe</button><button data-mode="delta" class="${!isConsole&&W.view==='delta'?'on':''}" ${isConsole?'disabled':''}>Difference from Xbox</button></div><div class="seg zoomcontrols" id="simplezoom"><button data-z="fit" class="${zoom==='fit'?'on':''}">Fit</button><button data-z="1" class="${zoom==='1'?'on':''}">1×</button><button data-z="2" class="${zoom==='2'?'on':''}">2×</button></div></div>${runSelectors(family)}<div class="largeviewer">${isConsole||b?'<div class="stagebox" id="box"></div>':'<div class="largepending">Replay result pending. No correctness conclusion yet.</div>'}</div><div class="viewcaption"><span>${isConsole?'Live Xbox reference':b?`${family}: <b>${P(st.differing,st.pixels,2)} of pixels differ from Xbox 360</b> · ${fmt(st.differing)} of ${fmt(st.pixels)}`:'Result not available'}</span><span>${isConsole?'Click a pixel to inspect':W.view==='compare'?'Drag the divider · click a pixel to inspect':'Red: higher than Xbox · blue: lower than Xbox · click to inspect'}</span></div>${!isConsole&&b&&W.view==='delta'?`<div class="keys">${[['--hi','Higher values'],['--lo','Lower values'],['--extra','Emulator changed; Xbox kept background'],['--missing','Xbox changed; emulator kept background'],['--edram','Earlier target contents'],['--pre','Unknown initial contents']].map(([v,t])=>`<span><i style="background:var(${v})"></i>${t}</span>`).join('')}</div>`:''}${conciseObservation(s,family)}${comparisonSummary(s,family)}<section class="technical" id="technical-evidence"><h2>Technical evidence</h2><h3 class="evidencetitle">Exact pixel values</h3><div class="insp" id="insp"><div class="empty">Click the image to inspect exact values. Candidate replays, where available, are explicitly named here.</div></div>${runHistory(family)}${evidence(s)}${technical(s)}</section></main></div>`}
+function syncPan(origin){const maxX=origin.scrollWidth-origin.clientWidth,maxY=origin.scrollHeight-origin.clientHeight;W.panX=maxX?origin.scrollLeft/maxX:0;W.panY=maxY?origin.scrollTop/maxY:0;document.querySelectorAll('.syncview').forEach(v=>{if(v!==origin){const x=W.panX*(v.scrollWidth-v.clientWidth),y=W.panY*(v.scrollHeight-v.clientHeight);if(Math.abs(v.scrollLeft-x)>1)v.scrollLeft=x;if(Math.abs(v.scrollTop-y)>1)v.scrollTop=y}})}
+function restorePan(){document.querySelectorAll('.syncview').forEach(v=>{v.scrollLeft=W.panX*(v.scrollWidth-v.clientWidth);v.scrollTop=W.panY*(v.scrollHeight-v.clientHeight)})}
+function setZoom(value){W.zoom=Math.max(1,Math.min(12,value));document.querySelectorAll('.imageplane').forEach(p=>p.style.width=W.zoom*100+'%');$('#zoomlabel').textContent=W.zoom.toFixed(1)+'× zoom';restorePan()}
+async function workspaceInspect(s,x,y){W.pick={x,y};document.querySelectorAll('.imageplane').forEach(p=>{let c=$('.cross',p);if(!c){c=document.createElement('i');c.className='cross';p.appendChild(c)}c.style.left=(x+.5)/s.width*100+'%';c.style.top=(y+.5)/s.height*100+'%'});const el=$('#workspace-pixel');el.innerHTML='<p>Loading exact pixel values…</p>';try{const data=await load(s);if(W.command!==s.command)return;const idx=y*s.width+x,c=data.console[idx];let rows=`<tr><td>Xbox 360</td><td>${hex(c,s.pixel_bytes)}</td><td>${esc(decode(s,c))}</td><td>Reference</td></tr>`;for(const f of families){const label=selectedLabel(f),v=data.backends[label];if(!v){rows+=`<tr><td>${f}</td><td colspan="3">Pending</td></tr>`;continue}const b=v.main[idx];rows+=`<tr><td>${f}${label!==backendBase(f)?' · '+esc(runName(runRecord(label))):''}</td><td>${hex(b,s.pixel_bytes)}</td><td>${esc(decode(s,b))}</td><td>${delta(s,c,b)}</td></tr>`}el.innerHTML=`<b>Pixel (${x}, ${y})</b><div class="tbl"><table class="plain words"><thead><tr><th>Backend</th><th>Exact bits</th><th>Decoded channels</th><th>Difference</th></tr></thead><tbody>${rows}</tbody></table></div>`}catch(error){el.innerHTML='<p>Pixel data could not be loaded: '+esc(error.message)+'</p>'}}
+function bindSidebar(){const nav=$('#stagelist');let scheduled=false;function reset(){W.listStart=0;nav.scrollTop=0;nav.innerHTML=stageList()}$('#diffonly').onchange=e=>{W.onlyDifferences=e.target.checked;reset()};$('#commandsearch').oninput=e=>{W.query=e.target.value;reset()};nav.onscroll=()=>{if(scheduled||innerWidth<=700||filteredTimeline().length<=150)return;scheduled=true;requestAnimationFrame(()=>{scheduled=false;const start=Math.max(0,Math.floor(nav.scrollTop/68)-8);if(Math.abs(start-W.listStart)>4){const y=nav.scrollTop;W.listStart=start;nav.innerHTML=stageList();nav.scrollTop=y}})};if(innerWidth>700){const all=filteredTimeline(),active=all.findIndex(c=>c.command===W.command);if(active>=0&&all.length>150){W.listStart=Math.max(0,active-8);nav.innerHTML=stageList();nav.scrollTop=Math.max(0,(active-3)*68)}}}
+function bindWorkspace(s){bindSidebar();const chosen=$('#selected-run'),compared=$('#comparison-run');if(chosen)chosen.onchange=()=>{W.selected[W.family]=chosen.value;renderWorkspace(s)};if(compared)compared.onchange=()=>{W.comparison[W.family]=compared.value;renderWorkspace(s)};$('#family').onclick=e=>{const b=e.target.closest('[data-family]');if(!b)return;W.family=b.dataset.family;renderWorkspace(s)};$('#displaymode').onclick=e=>{const b=e.target.closest('[data-mode]');if(!b||b.disabled)return;W.view=b.dataset.mode;renderWorkspace(s)};document.querySelectorAll('[data-variant]').forEach(select=>select.onchange=()=>{W.selected[select.dataset.variant]=select.value;renderWorkspace(s)});document.querySelectorAll('[data-step]').forEach(b=>b.onclick=()=>{const i=orderedStages.findIndex(c=>c.command===s.command)+Number(b.dataset.step);if(orderedStages[i])navigateCommand(orderedStages[i].command)});$('#simplezoom').onclick=e=>{const b=e.target.closest('[data-z]');if(!b)return;zoom=b.dataset.z;drawViewer();[...$('#simplezoom').children].forEach(x=>x.classList.toggle('on',x===b))};const box=$('#box');if(!box)return;drawViewer();box.addEventListener('mousedown',e=>{V.drag=current.view==='compare';V.moved=false;V.sx=e.clientX;if(V.drag)e.preventDefault()});box.addEventListener('touchmove',e=>{if(current.view!=='compare')return;V.moved=true;slide(e.touches[0]);e.preventDefault()},{passive:false});box.addEventListener('touchend',()=>{setTimeout(()=>V.moved=false,0)});box.addEventListener('click',e=>{if(V.moved){V.moved=false;return}const [fx,fy]=boxPos(e),x=Math.floor(fx*s.width),y=Math.floor(fy*s.height);if(x<0||y<0||x>=s.width||y>=s.height)return;current.pick=[x,y];drawViewer();inspect(x,y)});if(current.pick)inspect(...current.pick)}
+function renderWorkspace(s){const savedScroll={x:window.scrollX,y:window.scrollY,nav:$('#stagelist')?.scrollTop||0,main:$('.workmain')?.scrollTop||0,boxX:$('#box')?.scrollLeft||0,boxY:$('#box')?.scrollTop||0};const savedPick=current&&current.s.command===s.command?current.pick:null;const label=selectedLabel(W.family)||selectedLabel('Metal')||PRIMARY;current={s,label,view:W.family==='Xbox'?'console':W.view,pick:savedPick};$('#app').innerHTML=workspace(s);bindWorkspace(s);$('#stagelist').scrollTop=savedScroll.nav;$('.workmain').scrollTop=savedScroll.main;if($('#box')){$('#box').scrollLeft=savedScroll.boxX;$('#box').scrollTop=savedScroll.boxY}window.scrollTo(savedScroll.x,savedScroll.y);requestAnimationFrame(()=>{window.scrollTo(savedScroll.x,savedScroll.y)});document.title=`${D.title} · command ${s.command}`;updateRunComparison(s,W.family)}
+function unmeasuredWorkspace(c){const i=timeline.findIndex(x=>x.command===c.command),before=[...orderedStages].reverse().find(s=>s.command<c.command),after=orderedStages.find(s=>s.command>c.command);return `<div class="workspace"><aside class="stageside"><div class="sidehead"><p class="eyebrow">Live Xbox comparison</p><h1>${esc(D.title)}</h1><label><input type="checkbox" id="diffonly" ${W.onlyDifferences?'checked':''}>Measured differences only</label><input class="commandsearch" id="commandsearch" type="search" placeholder="Find command or primitive" aria-label="Find command or primitive" value="${esc(W.query)}"></div><nav class="stagelist" id="stagelist" aria-label="Measured comparison commands">${stageList()}</nav><div class="sidefoot">${D.stages.length} measured resolves / ${timeline.length} draw & resolve commands</div></aside><main class="workmain"><header class="workheader"><div><p class="eyebrow">Draw command ${c.command}</p><h2>${esc(c.name||c.primitive||'Draw command')}</h2><p>Recorded in the trace · no console image captured at this command.</p></div><div class="commandnav"><button data-step="-1" ${i===0?'disabled':''}>←</button><button data-step="1" ${i===timeline.length-1?'disabled':''}>→</button></div></header><section class="unmeasured"><h3>No console snapshot</h3><p>This command was replayed, but the comparison tool captured console output only at resolve stages. There is no measured pixel difference for this individual draw.</p><p>Its output may contribute to the next resolve. Open a measured resolve to compare Xbox, Metal and Vulkan.</p><div class="nearby">${before?`<a href="#c${before.command}">← Previous measured resolve ${before.command}</a>`:''}${after?`<a href="#c${after.command}">Next measured resolve ${after.command} →</a>`:''}</div></section><details class="technical" open><summary>Recorded draw state</summary><p class="worknote">${esc(c.primitive||'')} · ${fmt(c.count||0)} vertices/indices</p><div class="card pad tbl"><table class="plain"><tbody>${Object.entries(c.state||{}).map(([k,v])=>`<tr><th>${esc(k.replaceAll('_',' '))}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table></div></details></main></div>`}
+function renderUnmeasured(c){current=null;$('#app').innerHTML=unmeasuredWorkspace(c);bindSidebar();document.querySelectorAll('[data-step]').forEach(b=>b.onclick=()=>{const i=timeline.findIndex(x=>x.command===c.command)+Number(b.dataset.step);if(timeline[i])location.hash='c'+timeline[i].command});document.title=`${D.title} · command ${c.command}`}
+function route(){const m=location.hash.match(/^#c(\d+)/);let c=m&&COMMAND[Number(m[1])];if(c&&!STAGE[c.command]){const measured=orderedStages.find(s=>s.command>=c.command)||orderedStages.at(-1);c=measured&&COMMAND[measured.command];if(c)history.replaceState(null,'','#c'+c.command)}if(!c){const first=orderedStages.find(hasDifference)||orderedStages[0];c=first&&COMMAND[first.command]||timeline[0]}if(!c){$('#app').innerHTML='<p>No commands are available.</p>';return}if(W.command!==c.command){W.pick=null;W.zoom=1;W.panX=W.panY=0}W.command=c.command;if(!m)history.replaceState(null,'','#c'+c.command);const s=STAGE[c.command];if(s)renderWorkspace(s);else renderUnmeasured(c)}
+const FIRST_RUN_CHANGE=new Map();
+async function updateRunComparison(s,family){const token=++W.runToken;if(family==='Xbox')return;const selected=selectedLabel(family),comparison=comparisonLabel(family);if(!selected||!comparison||selected===comparison||!s.backends[selected]||!s.backends[comparison])return;const key=family+'\n'+selected+'\n'+comparison;const stillCurrent=()=>W.runToken===token&&W.command===s.command;try{const data=await load(s);if(!stillCurrent())return;const a=data.backends[selected]?.main,b=data.backends[comparison]?.main;if(!a||!b)throw Error('One run has no exact pixel data');let matched=0,broken=0,changed=0,bothWrong=0;for(let i=0;i<data.console.length;i++){if(a[i]!==b[i]){changed++;if(a[i]===data.console[i])matched++;else if(b[i]===data.console[i])broken++;else bothWrong++}}const target=$('#exact-run-delta');if(target)target.textContent=`Exact captured pixels: ${fmt(matched)} newly match Xbox; ${fmt(broken)} newly stop matching; ${fmt(bothWrong)} changed but still differ. ${fmt(changed)} output pixels changed. Raw counts include initial-state diagnostics.`;
+if(FIRST_RUN_CHANGE.has(key)){showFirst(FIRST_RUN_CHANGE.get(key));return}
+const countFirst=orderedStages.find(stage=>stage.backends[selected]&&stage.backends[comparison]&&stage.backends[selected].stats.differing!==stage.backends[comparison].stats.differing),firstEl=$('#first-affected');if(firstEl){firstEl.innerHTML=(countFirst?`First changed mismatch count: <a href="#c${countFirst.command}">command ${countFirst.command}</a>. `:'Mismatch counts are unchanged; output pixels may still differ. ')+`<button id="scan-run-history" class="exactscan">Find first changed output</button><span class="scanhelp">Reads earlier commands’ pixel data on request.</span>`;const button=$('#scan-run-history');if(button)button.onclick=async()=>{button.disabled=true;button.textContent='Scanning output pixels…';try{await scanHistory()}catch(error){if(stillCurrent())firstEl.textContent='Exact history scan unavailable: '+error.message}}}
+async function scanHistory(){let first=null,missing=false;for(const stage of orderedStages){if(!stillCurrent())return;if(!stage.backends[selected]||!stage.backends[comparison]){missing=true;continue}const d=stage.command===s.command?data:await load(stage);if(!stillCurrent())return;const x=d.backends[selected]?.main,y=d.backends[comparison]?.main;if(!x||!y){missing=true;continue}let differs=x.length!==y.length;for(let i=0;!differs&&i<x.length;i++)if(x[i]!==y[i])differs=true;if(stage.command!==W.command)delete DATA[stage.command];if(differs){first=stage.command;break}await new Promise(resolve=>setTimeout(resolve,0))}const result={first,missing};FIRST_RUN_CHANGE.set(key,result);showFirst(result)}
+function showFirst(result){if(!stillCurrent())return;const el=$('#first-affected');if(el)el.innerHTML=result.first!==null?`First changed output${result.missing?' among available runs':''}: <a href="#c${result.first}">command ${result.first}</a>.`:`${result.missing?'No change in available paired outputs; some commands have missing run data.':'All recorded command outputs are byte-identical between these runs.'}`}
+}catch(error){if(stillCurrent()){const el=$('#exact-run-delta');if(el)el.textContent='Exact run comparison unavailable: '+error.message;const first=$('#first-affected');if(first)first.textContent='First affected command has not been established.'}}}
+function navigateCommand(command){history.pushState(null,'','#c'+command);route()}
+document.addEventListener('click',event=>{const anchor=event.target.closest('a[href^="#c"]');if(!anchor||event.ctrlKey||event.metaKey||event.shiftKey||event.altKey)return;const match=anchor.getAttribute('href').match(/^#c(\d+)$/);if(!match)return;event.preventDefault();navigateCommand(Number(match[1]))});
+addEventListener('popstate',route);addEventListener('hashchange',route);route();
+</script></body></html>

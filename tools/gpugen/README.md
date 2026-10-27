@@ -41,6 +41,10 @@ recording again. Checking a backend is a build, `replay` and `check` per
 suite, with no console. `sweep` has none, as its tests depend on the
 environment.
 
+For captured game traces, see [Xbox trace replay and comparison](TRACE_REPLAY.md).
+It covers `play.py`, console execution, Metal/Vulkan replay, HTML reports and
+preserving named runs while iterating on backend changes.
+
 A console run needs the command processor microcode Direct3D passes to
 `VdInitializeEngines`: the kernel's own doesn't run these streams. It isn't
 distributed; `--microcode` takes the decrypted, decompressed image of an XEX

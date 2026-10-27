@@ -69,7 +69,6 @@ TRACE_HEADER = struct.Struct('<I40sI')  # version, build commit, title id
 
 PAGE = 0x1000
 RUN_ALIGNMENT = 0x10000
-COMMAND_OFFSET = gpugen.INPUT_OFFSET
 # Zeros in the block, after the trace's pages, that addresses outside them
 # point at, so the GPU reads none of the console's own memory, as a host
 # replay reads zeros there: enough for any texture a draw fetches from one.
@@ -82,6 +81,7 @@ NOP = 0x10
 RB_MODECONTROL = 0x2208
 RB_COPY_CONTROL, RB_COPY_DEST_BASE = 0x2318, 0x2319
 RB_COPY_DEST_PITCH, RB_COPY_DEST_INFO = 0x231A, 0x231B
+RB_COPY_SURFACE_SLICE = 0x2323
 RB_SAMPLE_COUNT_ADDR = 0x2325
 FETCH_CONSTANTS, FETCH_DWORDS = 0x4800, 192
 # SET_CONSTANT and LOAD_ALU_CONSTANT's types that hold addresses.
@@ -460,6 +460,9 @@ class Player:
             regs = [header & 0x7FF, header >> 11 & 0x7FF]
         elif kind == 3 and header >> 8 & 127 == 0x21:
             regs = [words[1] & 0x1FFF]
+        elif kind == 3 and header >> 8 & 127 in (0x55, 0x56):
+            regs = [(words[1] & 0xFFFF) + i
+                    for i in range(len(words) - 2)]
         else:
             return None
         system = [r for r in regs if system_register(r)]
@@ -481,9 +484,6 @@ class Player:
                 regs.get(RB_COPY_CONTROL, 0) >> 20 & 3 == 3):
             return None
         info = regs.get(RB_COPY_DEST_INFO, 0)
-        if info & 8:
-            raise TraceError(f'packet {self.packet}: resolve destination info '
-                             f'{info:08X}')
         bpp = COPY_BPP.get(info >> 7 & 63)
         if not bpp:
             raise TraceError(f'packet {self.packet}: resolve format '
@@ -491,7 +491,21 @@ class Player:
         pitch = regs.get(RB_COPY_DEST_PITCH, 0)
         size = (((pitch & 0x3FFF) + 31 & ~31) *
                 ((pitch >> 16 & 0x3FFF) + 31 & ~31) * bpp)
+        if info & 8:
+            width, height = pitch & 0x3FFF, pitch >> 16 & 0x3FFF
+            storage_height = self.resolve_storage_height()
+            # Keep the full eight-slice tile group. Slice addressing interleaves
+            # pages, so a 2D-sized capture can miss both writes and pixels.
+            size = max(size, ((width + 31) & ~31) *
+                       ((max(height, storage_height) + 31) & ~31) * 8 * bpp,
+                       4096)
         return regs.get(RB_COPY_DEST_BASE, 0) & 0x1FFFF000, size
+
+    def resolve_storage_height(self):
+        pitch = self.registers.get(RB_COPY_DEST_PITCH, 0)
+        width = pitch & 0x3FFF
+        area = self.registers.get(RB_COPY_SURFACE_SLICE, 0)
+        return area // width if area and width else pitch >> 16 & 0x3FFF
 
     def prepare(self, words, depth):
         """The packet as the console gets it, at `depth` 0 in the command
@@ -542,7 +556,7 @@ class Player:
             reg = words[1] & 0x1FFF
             if reg in (RB_MODECONTROL, RB_COPY_CONTROL, RB_COPY_DEST_BASE,
                        RB_COPY_DEST_PITCH, RB_COPY_DEST_INFO,
-                       RB_SAMPLE_COUNT_ADDR) or reg >= FETCH_CONSTANTS:
+                       RB_COPY_SURFACE_SLICE, RB_SAMPLE_COUNT_ADDR) or reg >= FETCH_CONSTANTS:
                 raise TraceError(f'packet {self.packet}: REG_RMW of {reg:X}')
         elif op == 0x22:
             if count >= 5 and not words[2] >> 6 & 3:
@@ -550,11 +564,13 @@ class Player:
         elif op == 0x27:
             if count >= 3:
                 field(1, 'shader')
-        elif op == 0x2D:
-            base = CONSTANT_BASES.get(words[1] >> 16 & 255)
+        elif op in (0x2D, 0x55, 0x56):
+            base = (0 if op in (0x55, 0x56) else
+                    CONSTANT_BASES.get(words[1] >> 16 & 255))
             for i in range(2, count):
                 if base is not None:
-                    reg = base + (words[1] & 0x7FF) + i - 2
+                    reg = base + (words[1] & (0xFFFF if op in (0x55, 0x56) else
+                                             0x7FF)) + i - 2
                     words[i], m = self.register_value(reg, words[i])
                     if m:
                         moved.append(i)
@@ -615,6 +631,13 @@ class Player:
                 if self.place is None:
                     self.mark(words[2], 4)
                 field(2, 'fence')
+        elif op == 0x5A:
+            if count != 3:
+                raise TraceError(f'packet {self.packet}: EVENT_WRITE_EXT '
+                                 f'of {count} words')
+            if self.place is None:
+                self.mark(words[2] & 0x1FFFFFFC, 12)
+            field(2, 'screen extent')
         elif op == 0x5B:
             address = self.registers.get(RB_SAMPLE_COUNT_ADDR, 0)
             if self.place is None:
@@ -671,6 +694,7 @@ class Player:
                     'control': self.registers.get(RB_COPY_CONTROL, 0),
                     'pitch': self.registers.get(RB_COPY_DEST_PITCH, 0),
                     'info': self.registers.get(RB_COPY_DEST_INFO, 0),
+                    'storage_height': self.resolve_storage_height(),
                     'source': self.offset(base, 'resolve')})
                 self.end_segment()
             self.command += 1
@@ -765,14 +789,33 @@ def tiled2d(x, y, pitch_aligned, bpp_log2):
             ((oib >> 4) & 1) << 5 | ((oib >> 5) & 7) << 8 | (oib >> 8) << 12)
 
 
+def tiled3d(x, y, z, pitch_aligned, height_aligned, bpp_log2):
+    """texture_address::Tiled3D, including the slice-dependent bank xor."""
+    outer = ((((z >> 2) * (height_aligned >> 4) + (y >> 4)) *
+              (pitch_aligned >> 5)) + (x >> 5)) << 7
+    inner = ((z & 3) << 5) | (((y >> 1) & 3) << 3) | (x & 7)
+    oib = (outer | inner) << bpp_log2
+    bank = ((y >> 3) ^ (z >> 2)) & 1
+    pipe = ((x >> 3) & 3) ^ (bank << 1)
+    return (((y & 1) << 4) | (pipe << 6) | (bank << 11) |
+            (oib & 15) | (((oib >> 4) & 1) << 5) |
+            (((oib >> 5) & 7) << 8) | ((oib >> 8) << 12))
+
+
 def stage_pixels(stage):
     """(x, y, byte offset, bytes) of each pixel of a stage's destination."""
     pitch, height = stage['pitch'] & 0x3FFF, stage['pitch'] >> 16 & 0x3FFF
     bpp = COPY_BPP[stage['info'] >> 7 & 63]
     aligned = (pitch + 31) & ~31
+    volume = bool(stage['info'] & 8)
+    slice_index = (stage['info'] >> 4) & 7
+    storage_height = (stage.get('storage_height', height) + 31) & ~31
     for y in range(height):
         for x in range(pitch):
-            yield x, y, tiled2d(x, y, aligned, bpp.bit_length() - 1), bpp
+            offset = (tiled3d(x, y, slice_index, aligned, storage_height,
+                              bpp.bit_length() - 1) if volume else
+                      tiled2d(x, y, aligned, bpp.bit_length() - 1))
+            yield x, y, offset, bpp
 
 
 def compare_stage(stage, expected, actual, low=None, high=None, mask=True):
@@ -930,8 +973,37 @@ def emit_edram_dump(s, dest, vertices):
     return written
 
 
-def build(trace, outdir, image=None, results=gpugen.NAME, next_name=None,
+class RingCapacityError(TraceError):
+    def __init__(self, required):
+        self.required = required
+        super().__init__(f'play ring requires {required} bytes')
+
+
+def build(*args, **kwargs):
+    # The executor embeds its physical layout while assembling. Grow the
+    # power-of-two ring together with all following control locations, then
+    # rebuild relocations; restore module defaults for other builds.
+    names = ('RING_SIZE', 'RPTR_OFFSET', 'FENCE_OFFSET', 'DUMMY_OFFSET',
+             'INPUT_OFFSET')
+    saved = {name: getattr(gpugen, name) for name in names}
+    try:
+        try:
+            return _build(*args, **kwargs)
+        except RingCapacityError as error:
+            size = 1 << error.required.bit_length()
+            gpugen.RING_SIZE = size
+            for name in names[1:]:
+                setattr(gpugen, name, saved[name] + size - saved['RING_SIZE'])
+            return _build(*args, **kwargs)
+    finally:
+        for name, value in saved.items():
+            setattr(gpugen, name, value)
+
+
+def _build(trace, outdir, image=None, results=gpugen.NAME, next_name=None,
           watchdog=None, reboot=False, edram=True, zero=True):
+    os.makedirs(outdir, exist_ok=True)
+    COMMAND_OFFSET = gpugen.INPUT_OFFSET
     title_id, records = read_trace(trace)
     scan = Player()
     scan.play(records)
@@ -1003,7 +1075,7 @@ def build(trace, outdir, image=None, results=gpugen.NAME, next_name=None,
                           'segment': len(stream.segments) - 1,
                           'stage': {k: stage[k] for k in (
                               'packet', 'command', 'base', 'size', 'control',
-                              'pitch', 'info')}})
+                              'pitch', 'info', 'storage_height')}})
             offset += stage['size'] + 15 & ~15
         work += struct.pack('>IIII', reads, len(segment_reads), stages,
                             len(segment_stages))
@@ -1041,6 +1113,8 @@ def build(trace, outdir, image=None, results=gpugen.NAME, next_name=None,
         f.write(bytes(NULL_BYTES))
         digest.update(bytes(NULL_BYTES))
     memory = f'{digest.hexdigest()[:16]}.mem'
+    if 4 * len(stream.words) >= gpugen.RING_SIZE:
+        raise RingCapacityError(4 * len(stream.words))
     xex, console_ready, watchdog = gpugen.write_title(
         outdir, stream, blobs, relocations, block_size, outputs_offset,
         output_words, image, results, next_name, watchdog, reboot, title_id,
@@ -1061,7 +1135,8 @@ def build(trace, outdir, image=None, results=gpugen.NAME, next_name=None,
             **({'edram': dump} if dump else {}),
             'play': {'packets': player.packet, 'commands': player.command,
                      'memory_bytes': player.memory_bytes,
-                     'block_size': block_size, **player.counts,
+                     'block_size': block_size, 'ring_size': gpugen.RING_SIZE,
+                     **player.counts,
                      **({'zeroed_bytes': sum(size for _, size in zeros[1:])}
                         if zero else {})}}
     with open(os.path.join(outdir, 'gpugen.json'), 'w') as f:
@@ -1072,8 +1147,7 @@ def build(trace, outdir, image=None, results=gpugen.NAME, next_name=None,
           f'{player.memory_bytes:#x} bytes')
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+def add_arguments(parser):
     parser.add_argument('trace')
     parser.add_argument('outdir')
     parser.add_argument('--microcode', metavar='IMAGE',
@@ -1096,7 +1170,9 @@ def main():
     parser.add_argument('--no-zero', action='store_true',
                         help='leave the pages no read fills before the '
                         'trace as the console\'s memory had them')
-    args = parser.parse_args()
+
+
+def run_from_args(args):
     image = None
     if args.microcode:
         with open(args.microcode, 'rb') as f:
@@ -1107,6 +1183,12 @@ def main():
               not args.no_zero)
     except TraceError as e:
         sys.exit(f'play: {e}')
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    add_arguments(parser)
+    run_from_args(parser.parse_args(argv))
 
 
 if __name__ == '__main__':
