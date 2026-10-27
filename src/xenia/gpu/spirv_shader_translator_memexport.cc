@@ -198,7 +198,7 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
 
   // Perform format packing.
 
-  auto flush_nan = [&](const EMIdArray& eM) -> EMIdArray {
+  auto saturate_nan = [&](const EMIdArray& eM) -> EMIdArray {
     EMIdArray eM_flushed;
     for_each_eM([&](uint32_t eM_index) {
       spv::Id element_unflushed = eM[eM_index];
@@ -209,7 +209,25 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
           builder_->createUnaryOp(spv::OpIsNan,
                                   type_bool_vectors_[component_count - 1],
                                   element_unflushed),
-          const_float_vectors_0_[component_count - 1], element_unflushed);
+          builder_->createUnaryOp(
+              spv::OpBitcast, type_float_vectors_[component_count - 1],
+              builder_->createBinOp(
+                  spv::OpBitwiseOr, type_uint_vectors_[component_count - 1],
+                  builder_->createBinOp(
+                      spv::OpBitwiseAnd,
+                      type_uint_vectors_[component_count - 1],
+                      builder_->createUnaryOp(
+                          spv::OpBitcast,
+                          type_uint_vectors_[component_count - 1],
+                          element_unflushed),
+                      builder_->smearScalar(
+                          spv::NoPrecision,
+                          builder_->makeUintConstant(0x80000000),
+                          type_uint_vectors_[component_count - 1])),
+                  builder_->smearScalar(
+                      spv::NoPrecision, builder_->makeUintConstant(0x7F800000),
+                      type_uint_vectors_[component_count - 1]))),
+          element_unflushed);
     });
     return eM_flushed;
   };
@@ -234,6 +252,60 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
       make_float_constant_vectors(-0.5f);
   std::array<spv::Id, 4> const_float_vectors_0_5 =
       make_float_constant_vectors(0.5f);
+
+  // Integer conversion has an asymmetric negative half-step threshold.
+  // Separating integral and fractional parts also avoids rounding a value just
+  // below +0.5 up to 1.0 while adding the rounding bias in float32.
+  auto round_integer = [&](spv::Id value, const std::array<uint32_t, 4>& widths,
+                           unsigned int count, bool signed_value) {
+    spv::Id type = type_float_vectors_[count - 1];
+    spv::Id negative = spv::NoResult;
+    spv::Id bias = const_float_vectors_0_5[count - 1];
+    spv::Id threshold = bias;
+    spv::Id direction = const_float_vectors_1_[count - 1];
+    if (signed_value) {
+      negative = builder_->createBinOp(
+          spv::OpFOrdLessThan, type_bool_vectors_[count - 1], value,
+          const_float_vectors_0_[count - 1]);
+      bias = builder_->createTriOp(
+          spv::OpSelect, type, negative,
+          const_float_vectors_minus_0_5[count - 1], bias);
+      direction = builder_->createTriOp(
+          spv::OpSelect, type, negative,
+          const_float_vectors_minus_1[count - 1], direction);
+      id_vector_temp_.clear();
+      for (unsigned int i = 0; i < count; ++i) {
+        id_vector_temp_.push_back(builder_->makeFloatConstant(
+            0.5f + float(uint32_t(1) << widths[i]) * 0x1p-24f));
+      }
+      spv::Id negative_threshold =
+          count > 1 ? builder_->makeCompositeConstant(type, id_vector_temp_)
+                    : id_vector_temp_.front();
+      threshold = builder_->createTriOp(spv::OpSelect, type, negative,
+                                        negative_threshold, threshold);
+    }
+    spv::Id integral = builder_->createUnaryBuiltinCall(
+        type, ext_inst_glsl_std_450_, GLSLstd450Trunc, value);
+    spv::Id fraction = builder_->createUnaryBuiltinCall(
+        type, ext_inst_glsl_std_450_, GLSLstd450FAbs,
+        builder_->createNoContractionBinOp(spv::OpFSub, type, value, integral));
+    spv::Id increment = builder_->createTriOp(
+        spv::OpSelect, type,
+        builder_->createBinOp(spv::OpFOrdGreaterThanEqual,
+                              type_bool_vectors_[count - 1], fraction,
+                              threshold),
+        direction, const_float_vectors_0_[count - 1]);
+    spv::Id integer_rounded = builder_->createNoContractionBinOp(
+        spv::OpFAdd, type, integral, increment);
+    spv::Id normalized_rounded = builder_->createNoContractionBinOp(
+        spv::OpFAdd, type, value, bias);
+    return builder_->createTriOp(
+        spv::OpSelect, type,
+        count > 1 ? builder_->smearScalar(spv::NoPrecision, is_norm,
+                                          type_bool_vectors_[count - 1])
+                  : is_norm,
+        normalized_rounded, integer_rounded);
+  };
 
   // The widths must be without holes (R, RG, RGB, RGBA), and expecting the
   // widths to add up to the size of the stored texel (8, 16 or 32 bits), as the
@@ -297,8 +369,8 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
       }
     }
 
-    // Flush NaNs.
-    EMIdArray eM_flushed = flush_nan(eM_unflushed);
+    // Saturate NaNs according to their sign, like infinities.
+    EMIdArray eM_flushed = saturate_nan(eM_unflushed);
 
     // Convert to integers.
     SpirvBuilder::IfBuilder if_signed(
@@ -348,20 +420,8 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
             GLSLstd450FClamp, eM_signed[eM_index], signed_min, signed_max);
         eM_signed[eM_index] = builder_->createUnaryOp(
             spv::OpBitcast, type_uint_vectors_[component_count - 1],
-            builder_->createUnaryOp(
-                spv::OpConvertFToS, type_int_vectors_[component_count - 1],
-                builder_->createNoContractionBinOp(
-                    spv::OpFAdd, type_float_vectors_[component_count - 1],
-                    eM_signed[eM_index],
-                    builder_->createTriOp(
-                        spv::OpSelect, type_float_vectors_[component_count - 1],
-                        builder_->createBinOp(
-                            spv::OpFOrdLessThan,
-                            type_bool_vectors_[component_count - 1],
-                            eM_signed[eM_index],
-                            const_float_vectors_0_[component_count - 1]),
-                        const_float_vectors_minus_0_5[component_count - 1],
-                        const_float_vectors_0_5[component_count - 1]))));
+            builder_->createUnaryOp(spv::OpConvertFToS, type_int_vectors_[component_count - 1],
+                                    round_integer(eM_signed[eM_index], widths, component_count, true)));
       });
     }
     if_signed.makeBeginElse();
@@ -409,11 +469,7 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
             GLSLstd450FClamp, eM_unsigned[eM_index],
             const_float_vectors_0_[component_count - 1], unsigned_max);
         eM_unsigned[eM_index] = builder_->createUnaryOp(
-            spv::OpConvertFToU, type_uint_vectors_[component_count - 1],
-            builder_->createNoContractionBinOp(
-                spv::OpFAdd, type_float_vectors_[component_count - 1],
-                eM_unsigned[eM_index],
-                const_float_vectors_0_5[component_count - 1]));
+            spv::OpConvertFToU, type_uint_vectors_[component_count - 1], round_integer(eM_unsigned[eM_index], widths, component_count, false));
       });
     }
     if_signed.makeEndIf();
@@ -550,8 +606,8 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
   format_switch.makeBeginCase(
       static_cast<unsigned int>(xenos::ColorFormat::k_16_16_16_16));
   {
-    // Flush NaNs.
-    EMIdArray fixed16_flushed = flush_nan(eM_swapped);
+    // Saturate NaNs according to their sign, like infinities.
+    EMIdArray fixed16_flushed = saturate_nan(eM_swapped);
     spv::Id fixed16_signed_min = make_float_constant_vectors(-32768.0f)[3];
     spv::Id fixed16_signed_max = make_float_constant_vectors(32767.0f)[3];
     spv::Id fixed16_unsigned_max = make_float_constant_vectors(65535.0f)[3];
@@ -596,17 +652,8 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
             fixed16_signed[eM_index], fixed16_signed_min, fixed16_signed_max);
         fixed16_signed[eM_index] = builder_->createUnaryOp(
             spv::OpBitcast, type_uint4_,
-            builder_->createUnaryOp(
-                spv::OpConvertFToS, type_int4_,
-                builder_->createNoContractionBinOp(
-                    spv::OpFAdd, type_float4_, fixed16_signed[eM_index],
-                    builder_->createTriOp(
-                        spv::OpSelect, type_float4_,
-                        builder_->createBinOp(spv::OpFOrdLessThan, type_bool4_,
-                                              fixed16_signed[eM_index],
-                                              const_float4_0_),
-                        const_float_vectors_minus_0_5[3],
-                        const_float_vectors_0_5[3]))));
+            builder_->createUnaryOp(spv::OpConvertFToS, type_int4_,
+                                    round_integer(fixed16_signed[eM_index], std::array<uint32_t, 4>{16, 16, 16, 16}, 4, true)));
       });
     }
     if_signed.makeBeginElse();
@@ -645,10 +692,7 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
             type_float4_, ext_inst_glsl_std_450_, GLSLstd450FClamp,
             fixed16_unsigned[eM_index], const_float4_0_, fixed16_unsigned_max);
         fixed16_unsigned[eM_index] = builder_->createUnaryOp(
-            spv::OpConvertFToU, type_uint4_,
-            builder_->createNoContractionBinOp(spv::OpFAdd, type_float4_,
-                                               fixed16_unsigned[eM_index],
-                                               const_float_vectors_0_5[3]));
+            spv::OpConvertFToU, type_uint4_, round_integer(fixed16_unsigned[eM_index], std::array<uint32_t, 4>{16, 16, 16, 16}, 4, false));
       });
     }
     if_signed.makeEndIf();
