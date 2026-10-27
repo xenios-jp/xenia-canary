@@ -150,3 +150,24 @@ Suites:
   `transcendental_tables.py` packs the sweeps into Xenia's
   xenos_transcendentals table this way. Denormal inputs
   read as zero, results under 2^-126 are +0, and NaN comes back as is.
+- Control flow (`flow`): a vertex vector is 64 vertices. Control flow sees a
+  setp only from an exec marked predicate-dirty (CF bit 41 clear), ALU
+  predication either way. A predicated exec or call runs for the whole vector
+  if any vertex passes; a predicated jmp or loop break is taken only if every
+  vertex does.
+- Pixel shader control flow (`psflow`, `psflow1`, `psflow2`): a pixel vector is 64
+  pixels, 16 2x2 quads: a rectangle's are its window-aligned 8x8 tiles, a
+  triangle's 16 of its quads (partly covered ones too) in rows of 4, packed
+  differently each run, a point list's 16 consecutive points. A predicated
+  cond_exec or call runs the whole vector if any pixel passes, killed ones
+  included; a predicated jmp or loop break is taken only if all do, so a
+  loop runs the vector's largest count. Predicated ALU, fetches, setps and
+  kills act per pixel. Control flow takes the predicate at its first
+  predicated instruction after a dirty exec, as it is then, and keeps it
+  until the next dirty exec; a cond_exec on a bool constant (ops 3 and 4)
+  is dirty, ops 13 and 14 aren't, and the predicate starts clear. A dirty
+  exec counts only where it runs: one skipped on its bool constant or on the
+  predicate, or jumped over, leaves control flow's copy as it was. A killed
+  pixel keeps running and voting but exports nothing after the kill. Loop
+  N reads loop constant N, aL and a0 relative reads are per pixel, and an
+  export's dest_rel bits don't add aL.
