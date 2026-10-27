@@ -199,6 +199,16 @@ void Shader::AnalyzeUcode(StringBuffer& ucode_disasm_buffer) {
   }
   ucode_disassembly_ = ucode_disasm_buffer.to_string();
 
+  // Individual eA writes may only update the element index, or may belong to
+  // allocations that never write data. A noncanonical address instruction is
+  // not itself an error; diagnose missing stream information for the shader.
+  if (memexport_eM_written_ && memexport_stream_constants_.empty()) {
+    XELOGE(
+        "Shader {:016X} writes memexport data but no stream descriptor "
+        "constant could be identified; export memory ranges are unknown",
+        ucode_data_hash());
+  }
+
   // A label jumped back to may be reentered after anything within the span of
   // the jumps back overlapping it. With subroutines, anything may be executed
   // before returning to a label.
@@ -974,10 +984,12 @@ void Shader::GatherAluInstructionInformation(
         }
       }
       memexport_streams_.push_back(memexport_stream);
-    } else {
-      XELOGE(
-          "ShaderTranslator::GatherAluInstructionInformation: Couldn't extract "
-          "memexport stream constant index");
+    } else if (instr.vector_and_constant_result.GetUsedWriteMask() ||
+               instr.scalar_result.GetUsedWriteMask()) {
+      XELOGD(
+          "Shader {:016X} ALU {} (CF {}): memexport address write is not a "
+          "full descriptor MAD; no stream constant inferred at this site",
+          ucode_data_hash(), instruction_address, exec_cf_index);
     }
   }
 }
