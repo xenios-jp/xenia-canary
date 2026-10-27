@@ -1019,7 +1019,8 @@ def build_stream(suite, layout):
                 test.passes):
             zpd_begin(index)
             emit_registers(s, registers)
-            emit_texture_fetch_constants(s, fetch_constants, layout)
+            emit_texture_fetch_constants(s, fetch_constants, layout,
+                                         output, test.output_bytes(suite.slots))
             pass_primitive, pass_first, pass_vertices = (
                 draw[0] if draw else (primitive, first, vertices))
             query = test.viz_queries.get(index)
@@ -1030,7 +1031,8 @@ def build_stream(suite, layout):
                 s.packet3(pm4.VIZ_QUERY, [0x100 | query])
         zpd_begin(len(test.passes))
         emit_registers(s, test.after_passes)
-        emit_texture_fetch_constants(s, test.fetch_constants, layout)
+        emit_texture_fetch_constants(s, test.fetch_constants, layout,
+                                     output, test.output_bytes(suite.slots))
         if test.indices:
             texture, index_format, swap = test.indices
             emit_indexed_draw(s, vertices, primitive, first,
@@ -1099,14 +1101,29 @@ def emit_put_back(s, extra=()):
     emit_fence(s)
 
 
-def emit_texture_fetch_constants(s, fetch_constants, layout):
+def emit_texture_fetch_constants(s, fetch_constants, layout,
+                                 output=None, output_bytes=None):
     """{slot: (6 words, texture name, None or (base, mips) names)}, with the
     texture's block offset added to the base address (and the mips' to the
-    mip address)."""
+    mip address). A ('$output_vertex', byte_offset) view instead relocates
+    the first dword as a vertex-fetch base within this test's owned output.
+    Its descriptor size and alignment are checked before relocation."""
     for slot, (words, texture) in sorted(fetch_constants.items()):
         pad_to(s, 2, 1)
         s.words.append(pm4.type0(FETCH_CONSTANTS + 6 * slot, 6))
-        if texture is not None:
+        if isinstance(texture, tuple) and texture[0] == '$output_vertex':
+            # A vertex-fetch view of this test's output, for dependent draws.
+            # Unlike a texture base this needs only dword alignment.
+            offset = texture[1]
+            size = ((words[1] >> 2) & 0xFFFFFF) * 4
+            if (output is None or output_bytes is None or
+                    not isinstance(offset, int) or offset < 0 or (output + offset) & 3 or
+                    words[0] != 3 or offset + size > output_bytes):
+                raise ValueError('output vertex fetch exceeds its aligned test buffer')
+            words = list(words)
+            s.relocations.append((len(s.words), 0))
+            words[0] += output + offset
+        elif texture is not None:
             base, mips = texture if isinstance(texture, tuple) else (
                 texture, None)
             s.relocations.append((len(s.words) + 1, 0))
