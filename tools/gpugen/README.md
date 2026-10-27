@@ -131,6 +131,8 @@ Suites:
 - `targets1`-`targets4`: the render targets and resolves games use
   (`targets`). `resolverect`: Resolve rectangles, destinations, window
   offsets, scissors, endianness and clears.
+- `queries`: occlusion query sample counts and VIZ query predication.
+  `scratch`: scratch register writeback.
 - `hiz1`-`hiz7`: the hierarchical depth and stencil tests, for every
   RB_HIZCONTROL value titles draw with (`hiz`).
 - `hiz9a`-`hiz9e`: the blocks a hierarchical depth draw writes, clears and
@@ -159,6 +161,9 @@ Suites:
   tiles, which titles never program (`cpmem`).
 - `texcube`, `texstack`, `texlod`, `texgrad`, `texaniso`: vertex shader cube
   map, stacked and 3D fetches, fine LOD, gradient LOD and anisotropy.
+- `vizdet1`, `vizdet2`, `vizstatusdet`: VIZ predication and the query status
+  registers with the sample counters reset first (`vizdet`); `vizpred1`,
+  `vizpred2` and `vizstatus` read them as earlier work left them.
 - `edramraw`: the converting Resolve that reads every EDRAM word back
   unchanged, for a dump of the whole EDRAM.
 - `aamask`: which samples of which pixels each PA_SC_AA_MASK bit enables,
@@ -381,6 +386,20 @@ What the console does, beyond what the expected results show:
 - Vertex snapping (`snap`, `snap2`): PA_SU_VTX_CNTL quant_mode 5, 6 and 7
   rasterize nothing, at every round_mode. Modes 0 to 4 move the edges of
   `snap2`'s wide rows as Xenia doesn't, which snaps no vertices.
+- Queries (`queries`): a report is 8 little-endian dwords, total, Z fail, Z
+  pass and stencil fail samples, each in two halves that each count half the
+  pixels, from counters that run on across reports and titles.
+  RB_SAMPLE_COUNT_CTL bit 1 copies them, bit 0 resets them after the copy.
+  The alpha test's kills aren't counted; RB_COLOR_MASK 0 draws are, and
+  RB_MODECONTROL 5 ignores oDepth. kill_pix_post_early_z keeps a VIZ query's
+  draw out of the counts. A draw predicated on a VIZ query was never
+  skipped here (see VIZ predication below); vizdet's reports, counters
+  reset, each count the predicated draw's 0x400 samples a half. A VIZ query
+  clears its id's bit of PA_SC_VIZ_QUERY_STATUS_0 and _1 (ids 32-63 in _1),
+  and the bit is set once its draws are through the pipeline: a read right
+  after the query sees it clear, one after a 3D idle wait set, unless
+  nothing was drawn (`vizstatusdet`). The bit stays until a query of the
+  same id runs.
 - Interpolation (`pixel`, `centroid`): a set SQ_INTERPOLATOR_CNTL.param_shade
   bit interpolates, a clear one is flat. sc_sample_cntl 0 evaluates smooth
   interpolators at the centroid, 1 at the center, 2 by sampling_pattern
@@ -446,6 +465,11 @@ What the console does, beyond what the expected results show:
   x 0 leave the top 8 rows of tiles 0-3 as they were, unless a test-only
   draw over two or more tiles, or another 0x3 draw over the tile row below,
   follows. 0x1 draws write every block they touch.
+- VIZ predication (`hiz9d`): a draw predicated on a VIZ query is skipped
+  when the hierarchical test rejected every quad of the query's draws (the
+  per-pixel depth test doesn't count), once the result is back: 21 draws
+  after the query it was, 4 after it wasn't. `queries` occludes by depth
+  NEVER, so it never saw a skip.
 - Hierarchical stencil (`hiz6`, `hiz7`): bit 2 writes it, bit 3 tests it.
   A draw with bit 2 records per 4x4-sample block whether the stencil it
   leaves (after write masks and failed tests, or untouched) equals bits
