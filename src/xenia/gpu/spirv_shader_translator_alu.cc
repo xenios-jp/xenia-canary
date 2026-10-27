@@ -53,8 +53,7 @@ bool SpirvShaderTranslator::CanUseFiniteProduct(uint64_t first,
 spv::Id SpirvShaderTranslator::UseFiniteProduct(spv::Id guarded, spv::Id first,
                                                 spv::Id second,
                                                 uint64_t first_reasons,
-                                                uint64_t second_reasons,
-                                                bool rounded_to_nearest) {
+                                                uint64_t second_reasons) {
   if (!CanUseFiniteProduct(first_reasons, second_reasons)) {
     return guarded;
   }
@@ -88,15 +87,8 @@ spv::Id SpirvShaderTranslator::UseFiniteProduct(spv::Id guarded, spv::Id first,
       type_float_, ext_inst_glsl_std_450_, GLSLstd450Fma, first, second,
       const_float_0_);
   builder_->addDecoration(product, spv::Decoration::FPFastMathMode, 0);
-  if (!rounded_to_nearest && RoundsTowardZero() &&
-      !RoundsTowardZeroInHardware()) {
-    // The fused product's exact error, also free of nsz.
-    auto error = builder_->createTriBuiltinCall(
-        type_float_, ext_inst_glsl_std_450_, GLSLstd450Fma, first, second,
-        builder_->createNoContractionUnaryOp(spv::OpFNegate, type_float_,
-                                             product));
-    builder_->addDecoration(error, spv::Decoration::FPFastMathMode, 0);
-    product = RoundTowardZero(product, error, first, second);
+  if (RoundsTowardZero() && !RoundsTowardZeroInHardware()) {
+    product = StepFusedProductTowardZero(product, first, second);
   }
   return finite == spv::NoResult
              ? product
@@ -567,33 +559,82 @@ spv::Id SpirvShaderTranslator::RoundTowardZero(spv::Id rounded, spv::Id error,
                                             GLSLstd450FAbs, x);
   };
 
-  // Opposite signs mean the rounding went away from zero.
+  spv::Id rounded_bits =
+      builder_->createUnaryOp(spv::OpBitcast, type_uint, rounded);
+  // Opposite signs, the sign bit of their xor, mean the rounding went away
+  // from zero. A NaN error is neither.
   spv::Id step = builder_->createBinOp(
-      spv::OpLogicalAnd, type_bool,
-      compare(spv::OpFOrdNotEqual, error, const_zero),
-      builder_->createBinOp(spv::OpLogicalNotEqual, type_bool,
-                            compare(spv::OpFOrdLessThan, error, const_zero),
-                            compare(spv::OpFOrdLessThan, rounded, const_zero)));
-  step =
-      builder_->createBinOp(spv::OpLogicalAnd, type_bool, step,
+      spv::OpShiftRightLogical, type_uint,
+      builder_->createBinOp(
+          spv::OpBitwiseXor, type_uint, rounded_bits,
+          builder_->createUnaryOp(spv::OpBitcast, type_uint, error)),
+      splat(type_uint, builder_->makeUintConstant(31)));
+  // A product that flushed to zero may leave an error that didn't.
+  spv::Id inexact =
+      builder_->createBinOp(spv::OpLogicalAnd, type_bool,
+                            compare(spv::OpFOrdNotEqual, error, const_zero),
                             compare(spv::OpFOrdNotEqual, rounded, const_zero));
+  spv::Id const_uint_0 = splat(type_uint, const_uint_0_);
+  step = builder_->createTriOp(spv::OpSelect, type_uint, inexact, step,
+                               const_uint_0);
   // Overflow from finite operands saturates.
-  spv::Id const_infinity = splat(type, builder_->makeFloatConstant(INFINITY));
   spv::Id overflowed = builder_->createBinOp(
       spv::OpLogicalAnd, type_bool,
-      compare(spv::OpFOrdEqual, absolute(rounded), const_infinity),
-      builder_->createBinOp(
-          spv::OpLogicalAnd, type_bool,
-          compare(spv::OpFOrdNotEqual, absolute(a), const_infinity),
-          compare(spv::OpFOrdNotEqual, absolute(b), const_infinity)));
-  step = builder_->createBinOp(spv::OpLogicalOr, type_bool, step, overflowed);
-  spv::Id stepped = builder_->createUnaryOp(
+      builder_->createUnaryOp(spv::OpIsInf, type_bool, rounded),
+      compare(spv::OpFOrdLessThan,
+              builder_->createBinBuiltinCall(type, ext_inst_glsl_std_450_,
+                                             GLSLstd450NMax, absolute(a),
+                                             absolute(b)),
+              splat(type, builder_->makeFloatConstant(INFINITY))));
+  step = builder_->createTriOp(spv::OpSelect, type_uint, overflowed,
+                               splat(type_uint, builder_->makeUintConstant(1)),
+                               step);
+  return builder_->createUnaryOp(
+      spv::OpBitcast, type,
+      builder_->createBinOp(spv::OpISub, type_uint, rounded_bits, step));
+}
+
+spv::Id SpirvShaderTranslator::StepFusedProductTowardZero(spv::Id product,
+                                                          spv::Id a,
+                                                          spv::Id b) {
+  spv::Id type = builder_->getTypeId(product);
+  int component_count = builder_->getNumComponents(product);
+  spv::Id type_bool = type_bool_vectors_[component_count - 1];
+  spv::Id type_uint = type_uint_vectors_[component_count - 1];
+  auto absolute = [&](spv::Id x) {
+    return builder_->createUnaryBuiltinCall(type, ext_inst_glsl_std_450_,
+                                            GLSLstd450FAbs, x);
+  };
+  // The exact product's magnitude less the rounded one, negative where the
+  // rounding went away from zero, including to an infinity from finite
+  // operands, which steps to the largest finite value. Zero and NaN don't
+  // step. Kept free of nsz so the negated magnitude isn't folded away.
+  builder_->addCapability(spv::Capability::FloatControls2);
+  builder_->addExtension("SPV_KHR_float_controls2");
+  spv::Id excess = builder_->createTriBuiltinCall(
+      type, ext_inst_glsl_std_450_, GLSLstd450Fma, absolute(a), absolute(b),
+      builder_->createNoContractionUnaryOp(spv::OpFNegate, type,
+                                           absolute(product)));
+  builder_->addDecoration(excess, spv::Decoration::FPFastMathMode, 0);
+  spv::Id step = builder_->createTriOp(
+      spv::OpSelect, type_uint,
+      builder_->createBinOp(spv::OpFOrdLessThan, type_bool, excess,
+                            const_float_vectors_0_[component_count - 1]),
+      component_count == 1
+          ? builder_->makeUintConstant(1)
+          : builder_->makeCompositeConstant(
+                type_uint, std::vector<spv::Id>(component_count,
+                                                builder_->makeUintConstant(1))),
+      component_count == 1
+          ? const_uint_0_
+          : builder_->makeCompositeConstant(
+                type_uint,
+                std::vector<spv::Id>(component_count, const_uint_0_)));
+  return builder_->createUnaryOp(
       spv::OpBitcast, type,
       builder_->createBinOp(
           spv::OpISub, type_uint,
-          builder_->createUnaryOp(spv::OpBitcast, type_uint, rounded),
-          splat(type_uint, builder_->makeUintConstant(1))));
-  return builder_->createTriOp(spv::OpSelect, type, step, stepped, rounded);
+          builder_->createUnaryOp(spv::OpBitcast, type_uint, product), step));
 }
 
 bool SpirvShaderTranslator::RoundsTowardZero() const {
@@ -610,17 +651,55 @@ spv::Id SpirvShaderTranslator::AluAdd(spv::Id a, spv::Id b) {
   if (!RoundsTowardZero() || RoundsTowardZeroInHardware()) {
     return sum;
   }
+  int component_count = builder_->getNumComponents(sum);
+  spv::Id type_bool = type_bool_vectors_[component_count - 1];
+  spv::Id type_uint = type_uint_vectors_[component_count - 1];
+  spv::Id const_zero = const_float_vectors_0_[component_count - 1];
+  auto splat_uint = [&](uint32_t value) {
+    spv::Id scalar = builder_->makeUintConstant(value);
+    if (component_count == 1) {
+      return scalar;
+    }
+    return builder_->makeCompositeConstant(
+        type_uint, std::vector<spv::Id>(component_count, scalar));
+  };
   // Two-sum error of the rounded sum, exact unless it overflowed.
   spv::Id b_rounded =
       builder_->createNoContractionBinOp(spv::OpFSub, type, sum, a);
+  spv::Id b_error =
+      builder_->createNoContractionBinOp(spv::OpFSub, type, b, b_rounded);
   spv::Id error = builder_->createNoContractionBinOp(
       spv::OpFAdd, type,
       builder_->createNoContractionBinOp(
           spv::OpFSub, type, a,
           builder_->createNoContractionBinOp(spv::OpFSub, type, sum,
                                              b_rounded)),
-      builder_->createNoContractionBinOp(spv::OpFSub, type, b, b_rounded));
-  return RoundTowardZero(sum, error, a, b);
+      b_error);
+  // An error of the opposite sign means the rounding went away from zero. A
+  // sum that flushed to zero leaves the same flushed sum as its error, and a
+  // NaN error is neither sign.
+  spv::Id away = builder_->createBinOp(
+      spv::OpFOrdLessThan, type_bool,
+      builder_->createTriOp(
+          spv::OpSelect, type,
+          builder_->createBinOp(spv::OpFOrdGreaterThan, type_bool, sum,
+                                const_zero),
+          error,
+          builder_->createNoContractionUnaryOp(spv::OpFNegate, type, error)),
+      const_zero);
+  // b less the sum less a is infinite where the sum overflowed from finite
+  // operands, and where the sum less a overflowed, only possible after the
+  // sum rounded away from zero. Infinite operands make it NaN.
+  away = builder_->createBinOp(
+      spv::OpLogicalOr, type_bool, away,
+      builder_->createUnaryOp(spv::OpIsInf, type_bool, b_error));
+  return builder_->createUnaryOp(
+      spv::OpBitcast, type,
+      builder_->createBinOp(
+          spv::OpISub, type_uint,
+          builder_->createUnaryOp(spv::OpBitcast, type_uint, sum),
+          builder_->createTriOp(spv::OpSelect, type_uint, away, splat_uint(1),
+                                splat_uint(0))));
 }
 
 spv::Id SpirvShaderTranslator::AluSubtract(spv::Id a, spv::Id b) {
@@ -637,6 +716,9 @@ spv::Id SpirvShaderTranslator::AluMultiply(spv::Id a, spv::Id b) {
   spv::Id product = builder_->createNoContractionBinOp(spv::OpFMul, type, a, b);
   if (!RoundsTowardZero() || RoundsTowardZeroInHardware()) {
     return product;
+  }
+  if (features_.fused_multiply_add) {
+    return StepFusedProductTowardZero(product, a, b);
   }
   // Fma isn't guaranteed to be fused (spirv_to_dxil splits 32-bit Fma into a
   // multiply and an add), so recover the product error with a Veltkamp split
@@ -669,6 +751,159 @@ spv::Id SpirvShaderTranslator::AluMultiply(spv::Id a, spv::Id b) {
   error = add(error, mul(a_low, b_high));
   error = add(error, mul(a_low, b_low));
   return RoundTowardZero(product, error, a, b);
+}
+
+spv::Id SpirvShaderTranslator::SumDotProductTerms(const spv::Id* terms,
+                                                  uint32_t term_count,
+                                                  spv::Id fallback) {
+  // The console adds the terms, in order, into a two's complement fixed point
+  // accumulator. Before each addition its unit becomes 2^(exponent - 24) for
+  // the largest exponent of the terms so far and of the accumulator itself,
+  // flooring the accumulator and the term to it. The sum rounds toward zero,
+  // and to a signed zero below the smallest normal. Products keep their
+  // exponent unbounded on the console; here one overflowing to infinity makes
+  // the fallback used instead. Exponents are biased throughout.
+  auto int_constant = [&](int32_t value) {
+    return builder_->makeIntConstant(value);
+  };
+  auto int_op = [&](spv::Op op, spv::Id a, spv::Id b) {
+    return builder_->createBinOp(op, type_int_, a, b);
+  };
+  auto uint_op = [&](spv::Op op, spv::Id a, spv::Id b) {
+    return builder_->createBinOp(op, type_uint_, a, b);
+  };
+  auto int_builtin = [&](GLSLstd450 op, spv::Id a, spv::Id b) {
+    return builder_->createBinBuiltinCall(type_int_, ext_inst_glsl_std_450_, op,
+                                          a, b);
+  };
+  spv::Id const_int_31 = int_constant(31);
+  spv::Id exponent = const_int_0_;
+  spv::Id term_exponent_max = const_int_0_;
+  spv::Id sum = const_int_0_;
+  for (uint32_t i = 0; i < term_count; ++i) {
+    spv::Id bits =
+        builder_->createUnaryOp(spv::OpBitcast, type_uint_, terms[i]);
+    spv::Id term_exponent =
+        builder_->createUnaryOp(spv::OpBitcast, type_int_,
+                                uint_op(spv::OpBitwiseAnd,
+                                        uint_op(spv::OpShiftRightLogical, bits,
+                                                builder_->makeUintConstant(23)),
+                                        builder_->makeUintConstant(0xFF)));
+    // The term in units of half its own least significant bit, converted from
+    // the term with its exponent field replaced. Zeros and denormals, which
+    // read as zeros, add nothing.
+    spv::Id term = builder_->createTriOp(
+        spv::OpSelect, type_int_,
+        builder_->createBinOp(spv::OpIEqual, type_bool_, term_exponent,
+                              const_int_0_),
+        const_int_0_,
+        builder_->createUnaryOp(
+            spv::OpConvertFToS, type_int_,
+            builder_->createUnaryOp(
+                spv::OpBitcast, type_float_,
+                uint_op(spv::OpBitwiseOr,
+                        uint_op(spv::OpBitwiseAnd, bits,
+                                builder_->makeUintConstant(0x807FFFFF)),
+                        builder_->makeUintConstant((127 + 24) << 23)))));
+    if (!i) {
+      term_exponent_max = term_exponent;
+      exponent = term_exponent;
+      sum = term;
+      continue;
+    }
+    term_exponent_max =
+        int_builtin(GLSLstd450SMax, term_exponent_max, term_exponent);
+    // Floored to its unit every addition, the accumulator stays within 26
+    // bits, so its own exponent exceeds the unit's by one at most, where it is
+    // outside [-2^25, 2^25), never with only the first term in it.
+    spv::Id new_exponent = exponent;
+    if (i > 1) {
+      new_exponent = int_op(
+          spv::OpIAdd, exponent,
+          builder_->createTriOp(
+              spv::OpSelect, type_int_,
+              builder_->createBinOp(
+                  spv::OpUGreaterThanEqual, type_bool_,
+                  uint_op(
+                      spv::OpIAdd,
+                      builder_->createUnaryOp(spv::OpBitcast, type_uint_, sum),
+                      builder_->makeUintConstant(1u << 25)),
+                  builder_->makeUintConstant(1u << 26)),
+              int_constant(1), const_int_0_));
+    }
+    new_exponent = int_builtin(GLSLstd450SMax, new_exponent, term_exponent);
+    sum = int_op(
+        spv::OpShiftRightArithmetic, sum,
+        int_builtin(GLSLstd450SMin, int_op(spv::OpISub, new_exponent, exponent),
+                    const_int_31));
+    exponent = new_exponent;
+    // The term in units of 2^(exponent - 24), floored.
+    sum =
+        int_op(spv::OpIAdd, sum,
+               int_op(spv::OpShiftRightArithmetic, term,
+                      int_builtin(GLSLstd450SMin,
+                                  int_op(spv::OpISub, exponent, term_exponent),
+                                  const_int_31)));
+  }
+  // Below 2^26, the magnitude converts exactly unless rounding went up, which
+  // one less in its bits takes back toward zero.
+  spv::Id magnitude = builder_->createUnaryOp(
+      spv::OpBitcast, type_uint_,
+      builder_->createUnaryBuiltinCall(type_int_, ext_inst_glsl_std_450_,
+                                       GLSLstd450SAbs, sum));
+  spv::Id magnitude_float =
+      builder_->createUnaryOp(spv::OpConvertUToF, type_float_, magnitude);
+  spv::Id result_bits = uint_op(
+      spv::OpISub,
+      builder_->createUnaryOp(spv::OpBitcast, type_uint_, magnitude_float),
+      builder_->createTriOp(
+          spv::OpSelect, type_uint_,
+          builder_->createBinOp(
+              spv::OpUGreaterThan, type_bool_,
+              builder_->createUnaryOp(spv::OpConvertFToU, type_uint_,
+                                      magnitude_float),
+              magnitude),
+          builder_->makeUintConstant(1), const_uint_0_));
+  // Scaled by 2^(exponent - 127 - 24) in the exponent field, with the biased
+  // exponent that gives checked for underflow and overflow.
+  spv::Id scale = int_op(spv::OpISub, exponent, int_constant(127 + 24));
+  spv::Id result_exponent = int_op(
+      spv::OpIAdd,
+      builder_->createUnaryOp(spv::OpBitcast, type_int_,
+                              uint_op(spv::OpShiftRightLogical, result_bits,
+                                      builder_->makeUintConstant(23))),
+      scale);
+  result_bits =
+      uint_op(spv::OpIAdd, result_bits,
+              builder_->createUnaryOp(
+                  spv::OpBitcast, type_uint_,
+                  int_op(spv::OpShiftLeftLogical, scale, int_constant(23))));
+  // An overflow gives the largest finite value.
+  result_bits = builder_->createTriOp(
+      spv::OpSelect, type_uint_,
+      builder_->createBinOp(spv::OpSGreaterThan, type_bool_, result_exponent,
+                            int_constant(0xFE)),
+      builder_->makeUintConstant(0x7F7FFFFF), result_bits);
+  result_bits = builder_->createTriOp(
+      spv::OpSelect, type_uint_,
+      builder_->createBinOp(
+          spv::OpLogicalOr, type_bool_,
+          builder_->createBinOp(spv::OpSLessThan, type_bool_, result_exponent,
+                                int_constant(1)),
+          builder_->createBinOp(spv::OpIEqual, type_bool_, magnitude,
+                                const_uint_0_)),
+      const_uint_0_, result_bits);
+  spv::Id result = builder_->createUnaryOp(
+      spv::OpBitcast, type_float_,
+      uint_op(spv::OpBitwiseOr, result_bits,
+              uint_op(spv::OpBitwiseAnd,
+                      builder_->createUnaryOp(spv::OpBitcast, type_uint_, sum),
+                      builder_->makeUintConstant(0x80000000))));
+  return builder_->createTriOp(
+      spv::OpSelect, type_float_,
+      builder_->createBinOp(spv::OpSLessThan, type_bool_, term_exponent_max,
+                            int_constant(0xFF)),
+      result, fallback);
 }
 
 void SpirvShaderTranslator::KillPixel(
@@ -1192,15 +1427,19 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
           component_mask & ~instr.vector_operands[0].GetIdenticalComponents(
                                instr.vector_operands[1]);
       spv::Id result = spv::NoResult;
+      spv::Id products[4];
       for (uint32_t i = 0; i < component_count; ++i) {
         spv::Id operand_components[2];
         for (unsigned int j = 0; j < 2; ++j) {
           operand_components[j] =
               builder_->createCompositeExtract(operands[j], type_float_, i);
         }
-        spv::Id product = builder_->createNoContractionBinOp(
-            spv::OpFMul, type_float_, operand_components[0],
-            operand_components[1]);
+        spv::Id product =
+            RoundsTowardZero()
+                ? AluMultiply(operand_components[0], operand_components[1])
+                : builder_->createNoContractionBinOp(spv::OpFMul, type_float_,
+                                                     operand_components[0],
+                                                     operand_components[1]);
         if (different & (1 << i)) {
           // Shader Model 3: +0 or denormal * anything = +-0.
           product = ZeroIfAnyOperandIsZero(
@@ -1209,11 +1448,12 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
                                  instr.vector_operands[0]),
               GetAbsoluteOperand(operand_components[1],
                                  instr.vector_operands[1]));
-          product = UseFiniteProduct(
-              product, operand_components[0], operand_components[1],
-              current_finite_multiply_.vector[0][i],
-              current_finite_multiply_.vector[1][i], true);
+          product = UseFiniteProduct(product, operand_components[0],
+                                     operand_components[1],
+                                     current_finite_multiply_.vector[0][i],
+                                     current_finite_multiply_.vector[1][i]);
         }
+        products[i] = product;
         if (!i) {
           result = product;
           continue;
@@ -1221,11 +1461,24 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
         result = builder_->createNoContractionBinOp(spv::OpFAdd, type_float_,
                                                     result, product);
       }
+      spv::Id addend = spv::NoResult;
       if (instr.vector_opcode == ucode::AluVectorOpcode::kDp2Add) {
-        result = builder_->createNoContractionBinOp(
-            spv::OpFAdd, type_float_, result,
-            GetOperandComponents(operand_storage[2], instr.vector_operands[2],
-                                 0b0001));
+        addend = GetOperandComponents(operand_storage[2],
+                                      instr.vector_operands[2], 0b0001);
+        result = builder_->createNoContractionBinOp(spv::OpFAdd, type_float_,
+                                                    result, addend);
+      }
+      if (RoundsTowardZero()) {
+        // Added from the last term, then the dp2add addend, to the first.
+        spv::Id terms[4];
+        uint32_t term_count = 0;
+        if (addend != spv::NoResult) {
+          terms[term_count++] = addend;
+        }
+        for (uint32_t i = component_count; i--;) {
+          terms[term_count++] = products[i];
+        }
+        result = SumDotProductTerms(terms, term_count, result);
       }
       return result;
     }

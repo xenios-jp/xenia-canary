@@ -42,7 +42,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
     // version number! Backends add it to their dated
     // PipelineDescription::kVersion, so bumping either one is enough. Only
     // ever raise it, a reverted layout change needs another bump.
-    static constexpr uint32_t kVersion = 32;
+    static constexpr uint32_t kVersion = 40;
 
     enum class DepthStencilMode : uint32_t {
       kNoModifiers,
@@ -611,6 +611,8 @@ class SpirvShaderTranslator : public ShaderTranslator {
     bool structured_vertex_control_flow = false;
     bool optimize_finite_multiplication = false;
     bool allow_float_contraction = false;
+    // GLSL.std.450 Fma is always fused, so it gives a product's exact error.
+    bool fused_multiply_add = false;
     // Keep fragment derivatives within their primitive on Metal drivers that
     // otherwise reuse values from adjacent primitives in a merged quad.
     bool primitive_fragment_helpers = false;
@@ -1023,14 +1025,20 @@ class SpirvShaderTranslator : public ShaderTranslator {
   spv::Id AluAdd(spv::Id a, spv::Id b);
   spv::Id AluSubtract(spv::Id a, spv::Id b);
   spv::Id AluMultiply(spv::Id a, spv::Id b);
-  // Steps a sum or product of a and b rounded to nearest toward zero if its
-  // exact error shows it rounded away, and saturates overflow.
+  // Steps a product of a and b rounded to nearest toward zero if its exact
+  // error shows it rounded away, and saturates overflow.
   spv::Id RoundTowardZero(spv::Id rounded, spv::Id error, spv::Id a, spv::Id b);
+  // Steps a fused product of a and b, rounded to nearest, toward zero where
+  // that rounding went away from it.
+  spv::Id StepFusedProductTowardZero(spv::Id product, spv::Id a, spv::Id b);
+  // Sums dot product terms, in the order given, as the console does, or
+  // returns fallback if any term is infinite or NaN.
+  spv::Id SumDotProductTerms(const spv::Id* terms, uint32_t term_count,
+                             spv::Id fallback);
   bool CanUseFiniteProduct(uint64_t first, uint64_t second) const;
-  // guarded is rounded as AluMultiply rounds unless rounded_to_nearest.
+  // guarded is rounded as AluMultiply rounds.
   spv::Id UseFiniteProduct(spv::Id guarded, spv::Id first, spv::Id second,
-                           uint64_t first_reasons, uint64_t second_reasons,
-                           bool rounded_to_nearest = false);
+                           uint64_t first_reasons, uint64_t second_reasons);
   // Pack/unpack two floats as Xbox 360 extended-range float16, where exponent
   // 31 is a large finite value (up to +-131008), not Inf/NaN.
   spv::Id PackFloat16x2ExtendedRange(spv::Id float2_value);
