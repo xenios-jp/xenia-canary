@@ -1,0 +1,6 @@
+{
+ "suite": "pointphase",
+ "source": "Xbox 360; three identical complete same-build captures, 2026-10-27. SHA256 4f05ab566a7b3eaa8f3d764cbc24c2ee8c812a245b8ec24b79bb8675bcba8bbe. Preserved in build-mac/upstream-fixes-20261027/tests/pointphase/verified/run-{1,2,3}-console_results.bin.",
+ "xtr": "ec3a8b433b324be5d24a11c2386e46878c95f110",
+ "results": "32f7a103d72df2d727620c3e8e8b281c30fa82ae"
+}
