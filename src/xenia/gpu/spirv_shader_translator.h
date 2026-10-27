@@ -1096,9 +1096,10 @@ class SpirvShaderTranslator : public ShaderTranslator {
                           spv::Id image_unsigned, spv::Id image_signed,
                           spv::Id sampler, spv::Id is_all_signed);
   // The explicit LOD, or the bias of a computed one: the fetch constant's, the
-  // register's and the instruction's.
+  // register's, unless IGNORE_REGISTER_LOD, and the instruction's.
   spv::Id TextureFetchLod(const ParsedTextureFetchInstruction& instr,
-                          spv::Id fetch_constant_word_4_signed);
+                          spv::Id fetch_constant_word_4_signed,
+                          bool ignore_register_lod);
   // getBCF's lane 0 and lanes 1 to 3.
   void TextureBorderColorFrac(const ParsedTextureFetchInstruction& instr,
                               spv::Id& lane_0_out, spv::Id& lanes_1_3_out);

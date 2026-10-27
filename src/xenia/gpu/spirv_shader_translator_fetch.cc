@@ -1929,7 +1929,12 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
         spv::Id fetch_constant_word_4_signed = builder_->createUnaryOp(
             spv::OpBitcast, type_int_, fetch_constant_word_4);
 
-        spv::Id lod = TextureFetchLod(instr, fetch_constant_word_4_signed);
+        // A vertex shader's computed LOD without register gradients is that of
+        // zero gradients, so the console reads the base level whatever the
+        // register LOD is.
+        spv::Id lod = TextureFetchLod(
+            instr, fetch_constant_word_4_signed,
+            instr.attributes.use_computed_lod && !use_computed_lod);
 
         // At an LOD fraction of exactly .5, the console's point mip filter
         // picks the smaller mip where host samplers pick the larger one, so
@@ -3253,7 +3258,7 @@ size_t SpirvShaderTranslator::FindOrAddSamplerBinding(
 
 spv::Id SpirvShaderTranslator::TextureFetchLod(
     const ParsedTextureFetchInstruction& instr,
-    spv::Id fetch_constant_word_4_signed) {
+    spv::Id fetch_constant_word_4_signed, bool ignore_register_lod) {
   // Accumulate the explicit LOD (or LOD bias) sources (in D3D11.3 specification
   // order: specified LOD + sampler LOD bias + instruction LOD bias).
   // Fetch constant LOD (bits 12:21 of the word 4).
@@ -3266,7 +3271,7 @@ spv::Id SpirvShaderTranslator::TextureFetchLod(
               builder_->makeUintConstant(12), builder_->makeUintConstant(10))),
       builder_->makeFloatConstant(1.0f / 32.0f));
   // Register LOD.
-  if (instr.attributes.use_register_lod) {
+  if (instr.attributes.use_register_lod && !ignore_register_lod) {
     lod = builder_->createNoContractionBinOp(
         spv::OpFAdd, type_float_,
         builder_->createLoad(var_main_tfetch_lod_, spv::NoPrecision), lod);
@@ -3488,7 +3493,7 @@ void SpirvShaderTranslator::TextureBorderColorFrac(
   if (filter_lod_dependent || mip_filter != xenos::TextureFilter::kBaseMap) {
     spv::Id fetch_constant_word_4_signed = builder_->createUnaryOp(
         spv::OpBitcast, type_int_, fetch_constant_word_4);
-    lod = TextureFetchLod(instr, fetch_constant_word_4_signed);
+    lod = TextureFetchLod(instr, fetch_constant_word_4_signed, false);
     if (TextureFetchUsesComputedLod(instr)) {
       spv::Id direction_lods[2] = {};
       for (uint32_t i = 0; i < 2; ++i) {
