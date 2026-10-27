@@ -339,9 +339,11 @@ class Rects:
         return self.draws[key]
 
 
-def build(suite, part):
+def build(suite, part, values=None):
     """Part 1 and 2 the values without base bits, 2 also D24S8 and 4x, 3
-    those with, 4 and 5 probes, 6 and 7 hierarchical stencil."""
+    those with, 4 and 5 probes, 6 and 7 hierarchical stencil. ``values``
+    overrides the control values for parts 1-3 without changing scenarios.
+    """
     rects = Rects()
     suite.add_texture('zero', rb.fill((0.0, 0.0, 0.0, 0.0)))
     vs = gpugen.interpolating_vertex_shader(8)
@@ -425,7 +427,8 @@ def build(suite, part):
         (probes if part == 4 else probes2)(test)
         suite.set_inputs(rects.inputs, 8)
         return
-    values = {1: VALUES[:14], 2: VALUES[14:], 3: MOVED}[part]
+    if values is None:
+        values = {1: VALUES[:14], 2: VALUES[14:], 3: MOVED}[part]
     for value in values:
         for scenario in SCENARIOS:
             test(f'{value:#x} {scenario}', value, scenario)
