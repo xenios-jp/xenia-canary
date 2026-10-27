@@ -110,14 +110,31 @@ Suites:
 - `stencil`, `depthstate`, `depthstencil`, `depthbias`, `depthbias2x`,
   `depthslope`, `depthgeometry`, `msaadepth`: D24S8 and D24FS8 conversion
   and compares, stencil, bias and slopes (`depthcases`).
+- `merger1`-`merger3`, `gammablend`, `gammamsaa`, `color7e3`, `msaablend`,
+  `samplecov`, `unormresolve`: render targets and exports, gamma, 7e3, MSAA
+  blending, sample coverage and resolves (`merger`).
+- `targets1`-`targets4`: the render targets and resolves games use
+  (`targets`). `resolverect`: Resolve rectangles, destinations, window
+  offsets, scissors, endianness and clears.
 - `hiz1`-`hiz7`: the hierarchical depth and stencil tests, for every
   RB_HIZCONTROL value titles draw with (`hiz`).
 - `hiz9a`-`hiz9e`: the blocks a hierarchical depth draw writes, clears and
   compares, block addresses and Metro 2033's VIZ predicated shadow cascades,
   each test writing every block first (`hiz9`). `hiz8a`-`hiz8d` read what
   the chain left, because their depth copying clears never write the buffer.
+- `reinterp1`-`reinterp3`: EDRAM written as one format or sample count
+  and read through a view of another, for every pair titles reinterpret,
+  and where each sample of each pixel sits (`reinterp`).
+- `tuples1`-`tuples3`: the per-draw output merger states titles combine
+  (sample count, targets' formats, blending and masks, depth, stencil, alpha
+  test and to mask, polygon offset), each as the commonest draw with it in
+  the game traces sets its registers (`tuples`).
 - `extreme`, `sweeprcp`, `sweeplogh`: products and sums at the edges of the
   float range, rcp over [1, 2) and log over [0.5, 1), every mantissa.
+- `cwround`, `blendk`, `alpharef`, `gmexp`, `sprite10`: colour write
+  rounding at each format's boundaries, blend constants per format, more
+  alpha test references, 8_8_8_8_GAMMA at 2x and 4x through every resolve
+  and Metro: Last Light's sprite blend.
 - `zplane1`-`zplane3`, `zvertex1`, `zvertex2`, `zoffset1`, `zoffset2`,
   `zresolve1`: depth interpolated over triangles, from a vertex's Z, W and
   viewport, with constant polygon offsets, and depth resolved to other
@@ -127,6 +144,11 @@ Suites:
   tiles, which titles never program (`cpmem`).
 - `edramraw`: the converting Resolve that reads every EDRAM word back
   unchanged, for a dump of the whole EDRAM.
+- `aamask`: which samples of which pixels each PA_SC_AA_MASK bit enables,
+  at 1x, 2x and 4x, read back through `edramraw`'s view.
+
+What the console does, beyond what the expected results show:
+
 - Arithmetic (`smoke`, `alu`, `specials`, `ops2`): products and sums,
   vector and scalar, round toward zero, an overflow to the largest finite
   value and anything below 2^-126 to zero. mad rounds its product, then the
@@ -262,6 +284,36 @@ Suites:
   center only at 2x with both covered. PsParamGen is always the center. The
   sample offsets are (1/4, -1/4) and (-1/4, 1/4) at 2x, and (3/8, -3/8),
   (-1/8, -1/8), (1/8, 1/8) and (-3/8, 3/8) at 4x, y down.
+- Colour writes (`cwround`, `cwulp`): after the exponent bias (a float32
+  scale by 2^bias), unorm channels (8_8_8_8, 2_10_10_10, AS_10_10_10_10's
+  colour and GAMMA's 10-bit linear value) clamp to [0, 1], truncate the
+  float to 23 fraction bits and store (Q23 (2^n - 1) + 2^22) >> 23; NaN goes
+  by its sign, + to 1 and - to 0. GAMMA stores the truncating piecewise
+  linear encode of that, and AS_10_10_10_10's 2-bit alpha is the 10-bit
+  alpha >> 8. 16_16 and 16_16_16_16 store v 1024 rounded half up and
+  clamped, NaN as infinity of its sign. The 16-bit floats round half away
+  from zero with no specials (exponent 31 is normal, NaN 0x7FFF or 0xFFFF
+  by sign). 7e3 rounds half up, and its AS_16_16_16_16 view truncates the
+  16_16_16_16 value into 7e3, alpha the fixed value >> 8.
+- Blend constants (`blendk`): 8_8_8_8 and 2_10_10_10 take q = the constant
+  written as a 10-bit unorm, and the factor q + (q >> 9) out of 1024 (INV
+  1024 minus that); 7e3 the same, shifted left 6 out of 65536.
+  16_16_16_16 takes the constant's fixed point value, unclamped, and
+  16_16_16_16_FLOAT reads 0.
+- Blending (`sprite10`): the 10-bit blender expands operands to 10 bits,
+  takes factors q + (q >> 9), and floors the sum of products >> 12 before
+  clamping; a host that rounds lands one high in most pixels.
+- Gamma MSAA resolves (`gmexp`): the colour is the encode of the truncated
+  mean of the samples' 10-bit linear decodes, decoded again, over 1023; the
+  alpha the truncated mean of the 10-bit expansions, cut to 8 bits ((a10 >>
+  2) / 255) even into 16-bit formats. Then the exponent bias, then the
+  destination's conversion, which into 8 bits truncates the float to 16-19
+  fraction bits before rounding half up.
+- Alpha test (`alpharef`, `arulp`): oC0.a against RB_ALPHA_REF as exact
+  float32, denormals kept, +0 equal to -0, and NaN on either side passing
+  only NOTEQUAL and ALWAYS. When both have the sign bit set (-0 too) and
+  differ, the alpha counts as the smaller. Alpha to mask's offset index is
+  (x & 1) + 2 (y & 1).
 - Hierarchical depth (`hiz1`-`hiz5`): RB_HIZCONTROL bit 0 writes the
   buffer, bit 1 tests it, bit 4 makes the test greater-than; bits above 17
   move it. The test ignores the depth compare, so it rejects ALWAYS draws,
@@ -298,3 +350,21 @@ Suites:
   draw's own compare or reference. A clearing Resolve with bit 2 makes
   every block pass; one without leaves them. Titles pair them, as Halo 3's
   0x4035 marking pass then 0x4038 and 0x403d at stencil EQUAL 0x40.
+- EDRAM reinterpretation (`reinterp1`-`reinterp3`): a raw Resolve copies
+  the bits whatever the view's format; every 32bpp color view, and D24S8
+  and D24FS8, copy the same words. A tile is 80 x 16 32bpp sample slots, in
+  which pixel (x, y) sample s sits at (x, y) at 1x, at (4 (x >> 2) + (x & 1)
+  + 2 s, 4 (y >> 1) + (y & 1) + 2 ((x >> 1) & 1)) at 2x and at (4 (x >> 1)
+  + (x & 1) + 2 (s & 1), 4 (y >> 1) + (y & 1) + 2 (s >> 1)) at 4x; tiles go
+  row-major, pitch / 80 of them a row, twice that at 4x. A 64bpp pixel takes
+  its slot in a pair of tiles: dword 1 in the first, dword 0 16 slots on
+  (mod 80) in the second. A depth view swaps the halves of each tile row,
+  slot x for x +- 40. Its depth test takes the word as depth << 8 |
+  stencil, unorm24 for D24S8 and 20e4 for D24FS8, and compares them as
+  integers (0.5 is 0x800000 and 0xE00000). A converting read decodes
+  whatever bits are there as the view's format. PA_SC_AA_MASK is a sample
+  mask for each pixel of a 2x2 quad: bit 4 ((x & 1) + 2 (y & 1)) + s
+  enables sample s, so at 1x only bits 0, 4, 8 and 12 count (`aamask`).
+- Per-draw state (`tuples1`-`tuples3`): a draw repeated with the same
+  vertices passes a depth EQUAL test on every sample it repeats and nowhere
+  else, as titles' depth prepasses rely on (D24FS8, 2x).
