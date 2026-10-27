@@ -107,8 +107,15 @@ Suites:
   MSAA samples and resolves.
 - `blend_products`: blending on the fixed point formats one product at a time,
   each operand swept or held.
+- `stencil`, `depthstate`, `depthstencil`, `depthbias`, `depthbias2x`,
+  `depthslope`, `depthgeometry`, `msaadepth`: D24S8 and D24FS8 conversion
+  and compares, stencil, bias and slopes (`depthcases`).
 - `extreme`, `sweeprcp`, `sweeplogh`: products and sums at the edges of the
   float range, rcp over [1, 2) and log over [0.5, 1), every mantissa.
+- `zplane1`-`zplane3`, `zvertex1`, `zvertex2`, `zoffset1`, `zoffset2`,
+  `zresolve1`: depth interpolated over triangles, from a vertex's Z, W and
+  viewport, with constant polygon offsets, and depth resolved to other
+  formats (`zplane`).
 - `destbase`, `destpitch`, `surfpitch`: Resolve destination bases off 4
   KiB, destination pitches off 32 texels and surface pitches off 80-pixel
   tiles, which titles never program (`cpmem`).
