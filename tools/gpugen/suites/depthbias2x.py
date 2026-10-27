@@ -1,5 +1,5 @@
 """The depth-bias suite's cases at 2x MSAA, as games draw polygon offset:
-through depthcases, each readback sample 0's raw depth and stencil words.
+through depthcases, reading both samples' raw depth and stencil words.
 """
 
 import os
