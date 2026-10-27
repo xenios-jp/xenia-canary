@@ -459,8 +459,12 @@ def signed8(v):
 
 
 def build(suite, cases, samples=1):
-    """With `samples` 2 or 4, every test runs multisampled, its readback
-    sample 0's words."""
+    """With `samples` 2 or 4, read every sample's raw depth/stencil words.
+
+    Keep the original sample-0 tests first and reuse their geometry for the
+    additional samples, including depth-fail and stencil cases.
+    """
+    extra_samples = []
     words = rb.RECT + [0, 0]
 
     def triangles(vertices):
@@ -530,11 +534,19 @@ def build(suite, cases, samples=1):
             fetched = texture
         key, texture, draw = draws[-1]
         name = test['name'] + (f' {samples}x' if samples > 1 else '')
-        rbdraw.test(suite, name, texture, registers, depth.RESOLVE,
-                draw=draw, passes=passes, after_passes=list(key), shader=vs,
-                pixel=rb.pixel_shader(depth=path == 1),
-                program_cntl=odepth_cntl if path == 1 else
-                zdepth.PROGRAM_CNTL,
-                clear=gpugen.resolve_registers(rb.WIDTH, rb.HEIGHT, 6, 4,
-                                               clear=(test['clear'], 0)))
+        options = dict(draw=draw, passes=passes, after_passes=list(key),
+                       shader=vs, pixel=rb.pixel_shader(depth=path == 1),
+                       program_cntl=odepth_cntl if path == 1 else
+                       zdepth.PROGRAM_CNTL,
+                       clear=gpugen.resolve_registers(
+                           rb.WIDTH, rb.HEIGHT, 6, 4,
+                           clear=(test['clear'], 0)))
+        rbdraw.test(suite, name, texture, registers, depth.RESOLVE, **options)
+        for sample in range(1, samples):
+            resolve = dict(depth.RESOLVE,
+                           control=depth.RESOLVE['control'] | (sample << 4))
+            extra_samples.append((f'{name} sample {sample}', texture,
+                                  registers, resolve, options))
+    for name, texture, registers, resolve, options in extra_samples:
+        rbdraw.test(suite, name, texture, registers, resolve, **options)
     suite.set_inputs(words, 8)

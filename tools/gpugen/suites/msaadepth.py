@@ -1,5 +1,5 @@
 """Depth at 2x and 4x MSAA: the depth suite's D24S8 / D24FS8 buffer and raw
-depth Resolve of sample 0, after a draw writing each pixel's depth (test
+depth Resolve of every sample, after a draw writing each pixel's depth (test
 ALWAYS, no stencil) over depth 0.5 and stencil 0, either from the vertices
 ('Z': a rectangle per pixel at its Z) or from the pixel shader ('oDepth': the
 X of a texture at the pixel, ps_export_mode 3, over Z 0.5). Pixel i's depth is
@@ -35,6 +35,7 @@ def rectangle(x0, y0, x1, y1, z):
 
 
 def build(suite):
+    extra_samples = []
     words = rb.RECT + [0, 0]
     whole = (pm4.PRIM_RECTANGLE_LIST, len(words) // 8, 3)
     words += rectangle(0, 0, WIDTH, HEIGHT, 0.5)
@@ -68,9 +69,20 @@ def build(suite):
                      pixels),
                     ('oDepth', rb.pixel_shader(depth=True), odepth_cntl,
                      texture, whole)):
-                rb.test(suite, f'{samples}x {fname} {path}', tex, state,
-                        depth.RESOLVE, draw=geometry,
-                        passes=[(reset, rb.fetch('half'), whole)],
-                        after_passes=draw, shader=vertex, pixel=pixel,
-                        program_cntl=cntl)
+                name = f'{samples}x {fname} {path}'
+                options = dict(draw=geometry,
+                               passes=[(reset, rb.fetch('half'), whole)],
+                               after_passes=draw, shader=vertex, pixel=pixel,
+                               program_cntl=cntl)
+                rb.test(suite, name, tex, state, depth.RESOLVE, **options)
+                for sample in range(1, samples):
+                    resolve = dict(depth.RESOLVE,
+                                   control=depth.RESOLVE['control'] |
+                                   (sample << 4))
+                    extra_samples.append((f'{name} sample {sample}', tex,
+                                          state, resolve, options))
+    # Preserve the original sample-0 tests and output offsets. Each additional
+    # sample reuses its draw's vertices, textures and state, with a fresh reset.
+    for name, texture, state, resolve, options in extra_samples:
+        rb.test(suite, name, texture, state, resolve, **options)
     suite.set_inputs(words, 8)
