@@ -110,6 +110,12 @@ Suites:
 - `stencil`, `depthstate`, `depthstencil`, `depthbias`, `depthbias2x`,
   `depthslope`, `depthgeometry`, `msaadepth`: D24S8 and D24FS8 conversion
   and compares, stencil, bias and slopes (`depthcases`).
+- `hiz1`-`hiz7`: the hierarchical depth and stencil tests, for every
+  RB_HIZCONTROL value titles draw with (`hiz`).
+- `hiz9a`-`hiz9e`: the blocks a hierarchical depth draw writes, clears and
+  compares, block addresses and Metro 2033's VIZ predicated shadow cascades,
+  each test writing every block first (`hiz9`). `hiz8a`-`hiz8d` read what
+  the chain left, because their depth copying clears never write the buffer.
 - `extreme`, `sweeprcp`, `sweeplogh`: products and sums at the edges of the
   float range, rcp over [1, 2) and log over [0.5, 1), every mantissa.
 - `zplane1`-`zplane3`, `zvertex1`, `zvertex2`, `zoffset1`, `zoffset2`,
@@ -256,3 +262,39 @@ Suites:
   center only at 2x with both covered. PsParamGen is always the center. The
   sample offsets are (1/4, -1/4) and (-1/4, 1/4) at 2x, and (3/8, -3/8),
   (-1/8, -1/8), (1/8, 1/8) and (-3/8, 3/8) at 4x, y down.
+- Hierarchical depth (`hiz1`-`hiz5`): RB_HIZCONTROL bit 0 writes the
+  buffer, bit 1 tests it, bit 4 makes the test greater-than; bits above 17
+  move it. The test ignores the depth compare, so it rejects ALWAYS draws,
+  and a pixel it rejects skips its stencil ops; a buffer left stale by
+  draws with 0 rejects pixels the depth test would pass. Its blocks are 4x4
+  samples, written only where a draw covers a whole block, and indexed by
+  RB_SURFACE_INFO's hiz_pitch: 0 rejects nothing, less than the width
+  aliases blocks. Which blocks a draw leaves written depends on its shape
+  and order: at 1x a draw within rows 0-15 leaves none, the same draw in
+  rows 16-31 all, and x < 20 over every row only rows 0-15.
+- Hierarchical depth clears and compares (`hiz9b`, `hiz9e`): a clearing
+  Resolve with RB_HIZCONTROL bit 0 sets every block to RB_HIZ_CLEAR's bits
+  0-10 when it copies a colour target (copy source 0-3, raw or converting);
+  one copying depth (source 4) leaves the buffer as it was. A draw with bit
+  0 sets each block it touches to the top 11 bits of the farthest depth the
+  block holds after it. The less-than test rejects a 2x2 quad whose nearest
+  depth is at least (S + 1) / 2048, S the block's 11 bits, so 0x7FF never
+  rejects; greater-than rejects one whose farthest depth is below the 20e4
+  value of S - 1. The buffer keeps its blocks across Resolves, tests and
+  titles; only a reboot sets them far.
+- Hierarchical depth addresses (`hiz9c`): blocks are 4x4 samples in 16x16
+  sample tiles, and tile (tx, ty) is stored at (ty floor(P / 16) + tx) xor
+  (ty & 1), P hiz_pitch, doubled at 4x. A hiz_pitch below 16 folds every
+  tile row onto the first; one below the width wraps rows into the next.
+- Hierarchical depth writes (`hiz9a`): 0x3 draws starting in tile row 0 at
+  x 0 leave the top 8 rows of tiles 0-3 as they were, unless a test-only
+  draw over two or more tiles, or another 0x3 draw over the tile row below,
+  follows. 0x1 draws write every block they touch.
+- Hierarchical stencil (`hiz6`, `hiz7`): bit 2 writes it, bit 3 tests it.
+  A draw with bit 2 records per 4x4-sample block whether the stencil it
+  leaves (after write masks and failed tests, or untouched) equals bits
+  8-15; with bit 5 clear the test then culls the blocks that did, set the
+  ones that didn't. Bits 6 and 7 change nothing, nor does the testing
+  draw's own compare or reference. A clearing Resolve with bit 2 makes
+  every block pass; one without leaves them. Titles pair them, as Halo 3's
+  0x4035 marking pass then 0x4038 and 0x403d at stencil EQUAL 0x40.
