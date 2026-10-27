@@ -1037,63 +1037,25 @@ std::vector<uint32_t> BuildEdramDumpShaderSpirv(
 
     auto load_average_4x_rgba8 = [&](spv::Id pixel_x, spv::Id pixel_y,
                                      spv::Id& packed_out) {
-      spv::Id type_float4 = builder.makeVectorType(type_float, 4);
-      spv::Id sum = spv::NoResult;
+      // Resolve the words a dump would store, including quantization and
+      // alias formats. Expand RGBA8 to ten-bit channels before averaging,
+      // then truncate. Pairing channels in 16-bit lanes avoids cross-carries.
+      auto expand_pair = [&](spv::Id packed) {
+        spv::Id channels = bitwise_and(packed, 0x00FF00FFu);
+        return bitwise_or(shift_left(channels, 2),
+                          bitwise_and(shift_right(channels, 6), 0x00030003u));
+      };
+      spv::Id sum_rb = const_uint_0, sum_ga = const_uint_0;
       for (uint32_t sample = 0; sample < 4; ++sample) {
-        spv::Id value;
-        if (key.GetColorFormat() != xenos::ColorRenderTargetFormat::k_8_8_8_8) {
-          // The resolve interprets EDRAM as RGBA8, but its owner may store a
-          // different format. Match the dump-and-resolve round trip before
-          // averaging, including gamma encoding and per-sample quantization.
-          spv::Id packed[2] = {};
-          load_and_pack(pixel_x, pixel_y, builder.makeIntConstant(sample),
-                        packed);
-          value = builder.createUnaryBuiltinCall(
-              type_float4, ext_inst_glsl_std_450, GLSLstd450UnpackUnorm4x8,
-              packed[0]);
-        } else {
-          spv::Builder::TextureParameters source_texture_parameters = {};
-          source_texture_parameters.sampler =
-              builder.createLoad(source_texture, spv::NoPrecision);
-          id_vector_temp.clear();
-          id_vector_temp.push_back(
-              builder.createUnaryOp(spv::OpBitcast, type_int, pixel_x));
-          id_vector_temp.push_back(
-              builder.createUnaryOp(spv::OpBitcast, type_int, pixel_y));
-          source_texture_parameters.coords =
-              builder.createCompositeConstruct(type_int2, id_vector_temp);
-          source_texture_parameters.sample = builder.makeIntConstant(sample);
-          value = builder.createTextureCall(
-              spv::NoPrecision, type_float4, false, true, false, false, false,
-              source_texture_parameters, spv::ImageOperandsMaskNone);
-        }
-        sum = sum == spv::NoResult
-                  ? value
-                  : builder.createBinOp(spv::OpFAdd, type_float4, sum, value);
+        spv::Id packed[2] = {};
+        load_and_pack(pixel_x, pixel_y, builder.makeIntConstant(sample),
+                      packed);
+        sum_rb = add(sum_rb, expand_pair(packed[0]));
+        sum_ga = add(sum_ga, expand_pair(shift_right(packed[0], 8)));
       }
-      spv::Id average =
-          builder.createBinOp(spv::OpVectorTimesScalar, type_float4, sum,
-                              builder.makeFloatConstant(0.25f));
-      spv::Id component_width = builder.makeUintConstant(8);
-      packed_out = spv::NoResult;
-      for (uint32_t component = 0; component < 4; ++component) {
-        spv::Id packed_component = builder.createUnaryOp(
-            spv::OpConvertFToU, type_uint,
-            builder.createBinOp(
-                spv::OpFAdd, type_float,
-                builder.createBinOp(spv::OpFMul, type_float,
-                                    builder.createCompositeExtract(
-                                        average, type_float, component),
-                                    builder.makeFloatConstant(255.0f)),
-                builder.makeFloatConstant(0.5f)));
-        packed_out =
-            component == 0
-                ? packed_component
-                : builder.createQuadOp(spv::OpBitFieldInsert, type_uint,
-                                       packed_out, packed_component,
-                                       builder.makeUintConstant(8 * component),
-                                       component_width);
-      }
+      packed_out = bitwise_or(
+          bitwise_and(shift_right(sum_rb, 4), 0x00FF00FFu),
+          shift_left(bitwise_and(shift_right(sum_ga, 4), 0x00FF00FFu), 8));
     };
 
     SpirvBuilder::IfBuilder if_write(write_condition,

@@ -12,6 +12,7 @@
 
 #include "edram.xesli"
 #include "pixel_formats.xesli"
+#include "resolve_unorm.xesli"
 #include "texture_address.xesli"
 
 #define kXenosCopySampleSelect_0 0u
@@ -927,6 +928,52 @@ XeResolveInfo XeResolveGetInfo(param_push_consts_xe) {
         pixel_2 = pixel_2.bgra;
         pixel_3 = pixel_3.bgra;
       }
+    }
+
+    // Qualified normal-format, same-format averages without exponent bias.
+    // Other conversions retain their existing float path until measured on
+    // hardware independently, including the two-sample selects on 4x surfaces.
+    bool XeResolveUsesUnorm10Average(XeResolveInfo resolve_info) {
+      return !resolve_info.edram_is_depth &&
+             resolve_info.dest_num_format == 0u &&
+             resolve_info.dest_exp_bias_factor == 1.0f &&
+             ((resolve_info.edram_format == 0u &&
+               resolve_info.dest_format == 6u) ||
+              (resolve_info.edram_format == 2u &&
+               resolve_info.dest_format == 7u)) &&
+             ((resolve_info.edram_msaa_samples == 1u &&
+               resolve_info.sample_select == kXenosCopySampleSelect_01) ||
+              (resolve_info.edram_msaa_samples == 2u &&
+               resolve_info.sample_select == kXenosCopySampleSelect_0123));
+    }
+
+    uint4_xe XeResolveLoad4Unorm10Average(
+        param_byte_buffer_xe(xe_resolve_edram) param_next_after_byte_buffer_xe
+        XeResolveInfo resolve_info, uint2_xe pixel_index) {
+      uint2_xe sum_0 = uint_x2_xe(0u), sum_1 = uint_x2_xe(0u);
+      uint2_xe sum_2 = uint_x2_xe(0u), sum_3 = uint_x2_xe(0u);
+      uint sample_count_log2 = resolve_info.edram_msaa_samples;
+      unroll_xe for (uint sample = 0u; sample < 4u; ++sample) {
+        if (sample < (1u << sample_count_log2)) {
+          uint4_xe addresses = XeResolveColorCopySource4SampleAddressesBytes(
+              resolve_info, pixel_index, sample);
+          sum_0 += XeResolveUnpackUnorm10(
+              byte_buffer_align4_load4_xe(xe_resolve_edram, addresses.x),
+              resolve_info.edram_format);
+          sum_1 += XeResolveUnpackUnorm10(
+              byte_buffer_align4_load4_xe(xe_resolve_edram, addresses.y),
+              resolve_info.edram_format);
+          sum_2 += XeResolveUnpackUnorm10(
+              byte_buffer_align4_load4_xe(xe_resolve_edram, addresses.z),
+              resolve_info.edram_format);
+          sum_3 += XeResolveUnpackUnorm10(
+              byte_buffer_align4_load4_xe(xe_resolve_edram, addresses.w),
+              resolve_info.edram_format);
+        }
+      }
+      return XeResolvePack4Unorm10(
+          sum_0, sum_1, sum_2, sum_3, resolve_info.edram_format,
+          sample_count_log2, resolve_info.dest_swap);
     }
 
     void XeResolveLoad8ScalarSamples(

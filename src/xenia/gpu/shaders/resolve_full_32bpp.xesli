@@ -53,13 +53,20 @@ entry_inputs_end_code_begin_compute_xe
   if (pixel_index.x >= resolve_info.width_div_8_scaled << 3u) {
     return;
   }
-  float4_xe pixel_0, pixel_1, pixel_2, pixel_3;
-  XeResolveLoad4RGBAColors(
-      pass_byte_buffer_xe(xe_resolve_edram) pass_next_after_byte_buffer_xe
-      resolve_info, pixel_index, pixel_0, pixel_1, pixel_2, pixel_3);
-  uint4_xe packed = XePack32bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3,
-                                       resolve_info.dest_format,
-                                       resolve_info.dest_num_format);
+  uint4_xe packed;
+  dont_flatten_xe if (XeResolveUsesUnorm10Average(resolve_info)) {
+    packed = XeResolveLoad4Unorm10Average(
+        pass_byte_buffer_xe(xe_resolve_edram) pass_next_after_byte_buffer_xe
+        resolve_info, pixel_index);
+  } else {
+    float4_xe pixel_0, pixel_1, pixel_2, pixel_3;
+    XeResolveLoad4RGBAColors(
+        pass_byte_buffer_xe(xe_resolve_edram) pass_next_after_byte_buffer_xe
+        resolve_info, pixel_index, pixel_0, pixel_1, pixel_2, pixel_3);
+    packed = XePack32bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3,
+                               resolve_info.dest_format,
+                               resolve_info.dest_num_format);
+  }
   dont_flatten_xe
   if (pixel_index.x == 0u &&
       resolve_info.half_pixel_offset_fill_source.x != 0u) {

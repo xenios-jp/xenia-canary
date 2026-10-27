@@ -68,6 +68,9 @@ entry_inputs_end_code_begin_compute_xe
   float4_xe pixel_0, pixel_1, pixel_2, pixel_3;
   float4_xe msaa_resolve_pixel_0, msaa_resolve_pixel_1, msaa_resolve_pixel_2,
       msaa_resolve_pixel_3;
+  bool fixed_unorm = XeResolveUsesUnorm10Average(resolve_info);
+  uint2_xe sum_0 = uint_x2_xe(0u), sum_1 = uint_x2_xe(0u);
+  uint2_xe sum_2 = uint_x2_xe(0u), sum_3 = uint_x2_xe(0u);
   uint4_xe packed;
   for (int sample = 0; sample < 4; ++sample) {
     packed.x = XeResolveDirectPackRGB10A2(
@@ -81,7 +84,12 @@ entry_inputs_end_code_begin_compute_xe
     packed.w = XeResolveDirectPackRGB10A2(
         texel_fetch_2d_ms_xe(xe_resolve_source, texel + int2_xe(3, 0),
                              sample));
-    if (sample == 0) {
+    if (fixed_unorm) {
+      sum_0 += XeResolveUnpackUnorm10(packed.x, resolve_info.edram_format);
+      sum_1 += XeResolveUnpackUnorm10(packed.y, resolve_info.edram_format);
+      sum_2 += XeResolveUnpackUnorm10(packed.z, resolve_info.edram_format);
+      sum_3 += XeResolveUnpackUnorm10(packed.w, resolve_info.edram_format);
+    } else if (sample == 0) {
       XeResolveUnpack32bpp4Samples(packed, resolve_info.edram_format, pixel_0,
                                    pixel_1, pixel_2, pixel_3);
       XeResolveDecodePWLGammaSource(resolve_info, pixel_0);
@@ -102,6 +110,11 @@ entry_inputs_end_code_begin_compute_xe
       pixel_3 += msaa_resolve_pixel_3;
     }
   }
+  if (fixed_unorm) {
+    packed = XeResolvePack4Unorm10(sum_0, sum_1, sum_2, sum_3,
+                                  resolve_info.edram_format, 2u,
+                                  resolve_info.dest_swap);
+  } else {
   float exp_bias = resolve_info.dest_exp_bias_factor * 0.5f * 0.5f;
   pixel_0 *= exp_bias;
   pixel_1 *= exp_bias;
@@ -117,6 +130,7 @@ entry_inputs_end_code_begin_compute_xe
   packed = XePack32bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3,
                               resolve_info.dest_format,
                               resolve_info.dest_num_format);
+  }
 #ifdef XE_RESOLVE_DIRECT_REFRESH
   XeResolveDirectRefreshWrite4(pixel_index, packed);
 #endif

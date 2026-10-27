@@ -1,0 +1,55 @@
+/**
+ ******************************************************************************
+ * Xenia : Xbox 360 Emulator Research Project                                 *
+ ******************************************************************************
+ * Copyright 2026 Ben Vanik. All rights reserved.                             *
+ * Released under the BSD license - see LICENSE in the root for more details. *
+ ******************************************************************************
+ */
+
+#ifndef XENIA_GPU_SHADERS_RESOLVE_UNORM_XESLI_
+#define XENIA_GPU_SHADERS_RESOLVE_UNORM_XESLI_
+
+#include "../../ui/shaders/xesl.xesli"
+
+// Normal RGBA8 / RGB10A2 resolves expand each channel to ten bits before
+// averaging, then truncate to the destination width. Two 16-bit lanes hold
+// red/blue and green/alpha; four ten-bit samples cannot carry between lanes.
+uint2_xe XeResolveUnpackUnorm10(uint packed, uint format) {
+  if (format == 0u) {
+    uint2_xe channels = uint2_xe(packed, packed >> 8u) & 0x00FF00FFu;
+    return (channels << 2u) | ((channels >> 6u) & 0x00030003u);
+  }
+  return uint2_xe((packed & 1023u) | ((packed >> 4u) & 0x03FF0000u),
+                  ((packed >> 10u) & 1023u) |
+                      (((packed >> 30u) * 341u) << 16u));
+}
+
+uint XeResolvePackUnorm10(uint2_xe sum, uint format, uint sample_count_log2) {
+  sum >>= sample_count_log2;
+  if (format == 0u) {
+    return ((sum.x >> 2u) & 0x00FF00FFu) |
+           (((sum.y >> 2u) & 0x00FF00FFu) << 8u);
+  }
+  return (sum.x & 1023u) | ((sum.y & 1023u) << 10u) |
+         ((sum.x & 0x03FF0000u) << 4u) | ((sum.y >> 24u) << 30u);
+}
+
+uint4_xe XeResolvePack4Unorm10(uint2_xe sum_0, uint2_xe sum_1,
+                              uint2_xe sum_2, uint2_xe sum_3, uint format,
+                              uint sample_count_log2, bool swap_rb) {
+  uint4_xe packed = uint4_xe(
+      XeResolvePackUnorm10(sum_0, format, sample_count_log2),
+      XeResolvePackUnorm10(sum_1, format, sample_count_log2),
+      XeResolvePackUnorm10(sum_2, format, sample_count_log2),
+      XeResolvePackUnorm10(sum_3, format, sample_count_log2));
+  if (swap_rb) {
+    uint rb_shift = format == 0u ? 16u : 20u;
+    uint mask = format == 0u ? 255u : 1023u;
+    uint4_xe swap = (packed ^ (packed >> rb_shift)) & mask;
+    packed ^= swap | (swap << rb_shift);
+  }
+  return packed;
+}
+
+#endif  // XENIA_GPU_SHADERS_RESOLVE_UNORM_XESLI_
