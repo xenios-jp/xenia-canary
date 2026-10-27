@@ -132,8 +132,8 @@ void AddPendingWrite(std::vector<draw_util::MemExportRange>& writes,
   writes.push_back(write);
 }
 
-// Guest shaders go SPIR-V -> DXIL -> AIR instead of SPIR-V -> MSL. Both start
-// from the same SpirvShaderTranslator output.
+// Select the converter-compatible resource interface rather than SPIRV-Cross
+// MSL. Guest compilation may use native AIR or the Mesa/DXIL converter path.
 bool UseDxilPath() { return cvars::metal_use_dxil; }
 
 // function_name_suffix is appended to the entry point name of the converted
@@ -1148,10 +1148,12 @@ MTL::Function* MetalCommandProcessor::GetSpecializedFunction(
   MTL::FunctionConstantValues* values =
       MTL::FunctionConstantValues::alloc()->init();
   for (uint32_t i = 0; i < binding_count; ++i) {
-    values->setConstantValue(
-        &states[4 * i], MTL::DataTypeUInt4,
-        NS::String::string(fmt::format("MSC_FC_{}", i).c_str(),
-                           NS::UTF8StringEncoding));
+    for (const char* prefix : {"MSC_FC_", "spirv2air_fc_"}) {
+      values->setConstantValue(
+          &states[4 * i], MTL::DataTypeUInt4,
+          NS::String::string(fmt::format("{}{}", prefix, i).c_str(),
+                             NS::UTF8StringEncoding));
+    }
   }
   NS::Error* error = nullptr;
   MTL::Function* function = library->newFunction(
