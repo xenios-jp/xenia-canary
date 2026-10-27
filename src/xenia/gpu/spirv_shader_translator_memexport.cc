@@ -256,6 +256,25 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
     }
     assert_not_zero(component_count);
 
+    // Memory export saturates integer channels to the destination range before
+    // packing. Masking an out-of-range converted value would wrap instead.
+    auto component_limit = [&](bool is_signed, bool minimum) {
+      id_vector_temp_.clear();
+      for (unsigned int i = 0; i < component_count; ++i) {
+        uint32_t magnitude = uint32_t(1) << (widths[i] - uint32_t(is_signed));
+        float limit = minimum ? (is_signed ? -float(magnitude) : 0.0f)
+                              : float(magnitude - 1);
+        id_vector_temp_.push_back(builder_->makeFloatConstant(limit));
+      }
+      return component_count > 1
+                 ? builder_->makeCompositeConstant(
+                       type_float_vectors_[component_count - 1], id_vector_temp_)
+                 : id_vector_temp_.front();
+    };
+    spv::Id signed_min = component_limit(true, true);
+    spv::Id signed_max = component_limit(true, false);
+    spv::Id unsigned_max = component_limit(false, false);
+
     // Extract the needed components.
     EMIdArray eM_unflushed = eM_swapped;
     if (component_count < 4) {
@@ -324,6 +343,9 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
       // Convert to signed integer, adding plus/minus 0.5 before truncating
       // according to the Direct3D format conversion rules.
       for_each_eM([&](uint32_t eM_index) {
+        eM_signed[eM_index] = builder_->createTriBuiltinCall(
+            type_float_vectors_[component_count - 1], ext_inst_glsl_std_450_,
+            GLSLstd450FClamp, eM_signed[eM_index], signed_min, signed_max);
         eM_signed[eM_index] = builder_->createUnaryOp(
             spv::OpBitcast, type_uint_vectors_[component_count - 1],
             builder_->createUnaryOp(
@@ -382,6 +404,10 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
       // Convert to unsigned integer, adding 0.5 before truncating according to
       // the Direct3D format conversion rules.
       for_each_eM([&](uint32_t eM_index) {
+        eM_unsigned[eM_index] = builder_->createTriBuiltinCall(
+            type_float_vectors_[component_count - 1], ext_inst_glsl_std_450_,
+            GLSLstd450FClamp, eM_unsigned[eM_index],
+            const_float_vectors_0_[component_count - 1], unsigned_max);
         eM_unsigned[eM_index] = builder_->createUnaryOp(
             spv::OpConvertFToU, type_uint_vectors_[component_count - 1],
             builder_->createNoContractionBinOp(
@@ -526,6 +552,9 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
   {
     // Flush NaNs.
     EMIdArray fixed16_flushed = flush_nan(eM_swapped);
+    spv::Id fixed16_signed_min = make_float_constant_vectors(-32768.0f)[3];
+    spv::Id fixed16_signed_max = make_float_constant_vectors(32767.0f)[3];
+    spv::Id fixed16_unsigned_max = make_float_constant_vectors(65535.0f)[3];
 
     // Convert to integers.
     SpirvBuilder::IfBuilder if_signed(
@@ -562,6 +591,9 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
       // Convert to signed integer, adding plus/minus 0.5 before truncating
       // according to the Direct3D format conversion rules.
       for_each_eM([&](uint32_t eM_index) {
+        fixed16_signed[eM_index] = builder_->createTriBuiltinCall(
+            type_float4_, ext_inst_glsl_std_450_, GLSLstd450FClamp,
+            fixed16_signed[eM_index], fixed16_signed_min, fixed16_signed_max);
         fixed16_signed[eM_index] = builder_->createUnaryOp(
             spv::OpBitcast, type_uint4_,
             builder_->createUnaryOp(
@@ -609,6 +641,9 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
       // Convert to unsigned integer, adding 0.5 before truncating according to
       // the Direct3D format conversion rules.
       for_each_eM([&](uint32_t eM_index) {
+        fixed16_unsigned[eM_index] = builder_->createTriBuiltinCall(
+            type_float4_, ext_inst_glsl_std_450_, GLSLstd450FClamp,
+            fixed16_unsigned[eM_index], const_float4_0_, fixed16_unsigned_max);
         fixed16_unsigned[eM_index] = builder_->createUnaryOp(
             spv::OpConvertFToU, type_uint4_,
             builder_->createNoContractionBinOp(spv::OpFAdd, type_float4_,
@@ -730,8 +765,16 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
   {
     EMIdArray format_packed_32_float;
     for_each_eM([&](uint32_t eM_index) {
+      // For single-channel float export, swap_rb selects alpha rather than
+      // applying the four-channel red/blue permutation.
+      spv::Id value = builder_->createTriOp(
+          spv::OpSelect, type_float_, swap_red_blue,
+          builder_->createCompositeExtract(eM_original[eM_index], type_float_, 3),
+          builder_->createCompositeExtract(eM_original[eM_index], type_float_, 0));
       format_packed_32_float[eM_index] = builder_->createUnaryOp(
-          spv::OpBitcast, type_uint4_, eM_swapped[eM_index]);
+          spv::OpBitcast, type_uint4_,
+          builder_->createCompositeInsert(value, eM_original[eM_index],
+                                          type_float4_, 0));
     });
     add_format_case(format_packed_32_float, 2);
   }
@@ -742,8 +785,16 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
   {
     EMIdArray format_packed_32_32_float;
     for_each_eM([&](uint32_t eM_index) {
+      // Two-channel float export keeps red and selects alpha for its second
+      // channel when swap_rb is set.
+      spv::Id value = builder_->createTriOp(
+          spv::OpSelect, type_float_, swap_red_blue,
+          builder_->createCompositeExtract(eM_original[eM_index], type_float_, 3),
+          builder_->createCompositeExtract(eM_original[eM_index], type_float_, 1));
       format_packed_32_32_float[eM_index] = builder_->createUnaryOp(
-          spv::OpBitcast, type_uint4_, eM_swapped[eM_index]);
+          spv::OpBitcast, type_uint4_,
+          builder_->createCompositeInsert(value, eM_original[eM_index],
+                                          type_float4_, 1));
     });
     add_format_case(format_packed_32_32_float, 3);
   }
