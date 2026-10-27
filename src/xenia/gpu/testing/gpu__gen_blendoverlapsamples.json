@@ -1,0 +1,6 @@
+{
+ "suite": "blendoverlapsamples",
+ "source": "Xbox 360: three identical captures; individual masked sample destinations and overlapping float10 blending at 2x/4x MSAA",
+ "xtr": "5598e01aebfe17f0c7aef3eef68f64bc8a161dd2",
+ "results": "03103ad79ac9c77efe035f94cf744648aa8d696c"
+}
