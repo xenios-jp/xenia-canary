@@ -1398,33 +1398,24 @@ spv::Id SpirvShaderTranslator::ProcessVectorAluOperation(
     }
 
     case ucode::AluVectorOpcode::kMax4: {
-      // Find max of all different components of the first operand.
-      // FIXME(Triang3l): Not caring about NaN because no info about the
-      // correct order, just using NMax here, which replaces them with the
-      // non-NaN component (however, there's one nice thing about it is that it
-      // may be compiled into max3 + max on GCN).
-      uint32_t components_remaining = 0b0000;
-      for (uint32_t i = 0; i < 4; ++i) {
-        SwizzleSource swizzle_source = instr.vector_operands[0].GetComponent(i);
-        assert_true(swizzle_source >= SwizzleSource::kX &&
-                    swizzle_source <= SwizzleSource::kW);
-        components_remaining |=
-            1 << (uint32_t(swizzle_source) - uint32_t(SwizzleSource::kX));
-      }
-      assert_not_zero(components_remaining);
-      spv::Id operand =
-          ApplyOperandModifiers(operand_storage[0], instr.vector_operands[0]);
-      uint32_t component;
-      xe::bit_scan_forward(components_remaining, &component);
-      components_remaining &= ~(uint32_t(1) << component);
-      spv::Id result = builder_->createCompositeExtract(
-          operand, type_float_, static_cast<unsigned int>(component));
-      while (xe::bit_scan_forward(components_remaining, &component)) {
-        components_remaining &= ~(uint32_t(1) << component);
-        result = builder_->createBinBuiltinCall(
-            type_float_, ext_inst_glsl_std_450_, GLSLstd450NMax, result,
-            builder_->createCompositeExtract(
-                operand, type_float_, static_cast<unsigned int>(component)));
+      // As the console does it: starting from W, each of Z, Y and X in turn
+      // replaces the maximum if it's greater than or equal to it, so a NaN in
+      // W is the result, NaNs in the other lanes are skipped, and of equal
+      // values (such as -0 and +0) the lowest lane wins. Every lane is
+      // compared even if some come from the same component, as a lane may
+      // replace an equal value of another component between them.
+      spv::Id operand = GetOperandComponents(operand_storage[0],
+                                             instr.vector_operands[0], 0b1111);
+      spv::Id result =
+          builder_->createCompositeExtract(operand, type_float_, 3);
+      for (unsigned int i = 3; i-- > 0;) {
+        spv::Id lane =
+            builder_->createCompositeExtract(operand, type_float_, i);
+        result = builder_->createTriOp(
+            spv::OpSelect, type_float_,
+            builder_->createBinOp(spv::OpFOrdGreaterThanEqual, type_bool_, lane,
+                                  result),
+            lane, result);
       }
       return result;
     }

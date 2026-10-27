@@ -552,20 +552,13 @@ void ShaderInterpreter::ExecuteAluInstruction(ucode::AluInstruction instr) {
         vector_result[2] *= 2.0f;
       } break;
       case ucode::AluVectorOpcode::kMax4: {
-        if (std::isgreaterequal(vector_operands[0][0], vector_operands[0][1]) &&
-            std::isgreaterequal(vector_operands[0][0], vector_operands[0][2]) &&
-            std::isgreaterequal(vector_operands[0][0], vector_operands[0][3])) {
-          vector_result[0] = vector_operands[0][0];
-        } else if (std::isgreaterequal(vector_operands[0][1],
-                                       vector_operands[0][2]) &&
-                   std::isgreaterequal(vector_operands[0][1],
-                                       vector_operands[0][3])) {
-          vector_result[0] = vector_operands[0][1];
-        } else if (std::isgreaterequal(vector_operands[0][2],
-                                       vector_operands[0][3])) {
-          vector_result[0] = vector_operands[0][2];
-        } else {
-          vector_result[0] = vector_operands[0][3];
+        // W, then Z, Y and X replacing it if greater than or equal, as the
+        // console does it.
+        vector_result[0] = vector_operands[0][3];
+        for (uint32_t i = 3; i-- > 0;) {
+          if (std::isgreaterequal(vector_operands[0][i], vector_result[0])) {
+            vector_result[0] = vector_operands[0][i];
+          }
         }
         replicate_vector_result_x = true;
       } break;

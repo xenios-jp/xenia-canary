@@ -42,7 +42,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
     // version number! Backends add it to their dated
     // PipelineDescription::kVersion, so bumping either one is enough. Only
     // ever raise it, a reverted layout change needs another bump.
-    static constexpr uint32_t kVersion = 30;
+    static constexpr uint32_t kVersion = 31;
 
     enum class DepthStencilMode : uint32_t {
       kNoModifiers,
