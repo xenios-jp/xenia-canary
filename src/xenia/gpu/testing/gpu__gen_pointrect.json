@@ -1,0 +1,6 @@
+{
+ "suite": "pointrect",
+ "source": "Xbox 360; three identical complete same-build captures, 2026-10-27. SHA256 9ccbc54656d9fe2bd25191659b0a744b781b3c79810572113630481bd9f60e9f. Preserved in build-mac/upstream-fixes-20261027/tests/pointrect/verified/run-{1,2,3}-console_results.bin.",
+ "xtr": "88f85e82936d60f2f3ead6901a4add52ed90a662",
+ "results": "77a08ef7a7d1b0d387684c7d972e747989d1a1e7"
+}

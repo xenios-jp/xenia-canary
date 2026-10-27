@@ -1,0 +1,6 @@
+{
+ "suite": "pointarea",
+ "source": "Xbox 360; three identical complete same-build captures, 2026-10-27. SHA256 3b844abe826eff660f8d6b403d38f7910288e97d5b5c16572c6208fdd6023412. Preserved in build-mac/upstream-fixes-20261027/tests/pointarea/verified/run-{1,2,3}-console_results.bin.",
+ "xtr": "9d00fce372524df714b0767ee299f8ead8020abd",
+ "results": "4cc2e4a3050e1afa795ffce4180ebaa46c6db321"
+}
