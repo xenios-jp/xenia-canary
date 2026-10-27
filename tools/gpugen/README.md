@@ -150,6 +150,10 @@ Suites:
   `transcendental_tables.py` packs the sweeps into Xenia's
   xenos_transcendentals table this way. Denormal inputs
   read as zero, results under 2^-126 are +0, and NaN comes back as is.
+- Indices (`indices`): an index is clamped to VGT_MIN_VTX_INDX and
+  VGT_MAX_VTX_INDX after VGT_INDX_OFFSET is added; the offset wraps at 24
+  bits and 32-bit indices keep bits 0-23. Primitive reset compares the raw
+  index, before the offset, in point and triangle lists too.
 - Control flow (`flow`): a vertex vector is 64 vertices. Control flow sees a
   setp only from an exec marked predicate-dirty (CF bit 41 clear), ALU
   predication either way. A predicated exec or call runs for the whole vector
@@ -171,3 +175,63 @@ Suites:
   pixel keeps running and voting but exports nothing after the kill. Loop
   N reads loop constant N, aL and a0 relative reads are per pixel, and an
   export's dest_rel bits don't add aL.
+- Shader constants and loads (`cpload`, `cpload2`, `cpalign`):
+  LOAD_ALU_CONSTANT copies its dwords into the constants from its index (4
+  per constant, the pixel shader's from 1024: 2032 and 2016 load its
+  c252-c255 and c248-c255), as type 0 writes do, and the later of the two
+  wins. IM_LOAD replaces the bound vertex or pixel shader, from the ring or
+  an indirect buffer at depth 1 or 2, also after INVALIDATE_STATE 0x7FFF. An
+  indirect buffer runs its packets (constants, loads, draws) as the ring
+  would, at depth 2 too. Data in a NOP is skipped. All of these run the same
+  from 16, 32 or 64 bytes past a 128-byte line (LOAD_ALU_CONSTANT), 32 or 64
+  past (IM_LOAD, indirect buffers, nested ones), and from an indirect buffer
+  ending where its packets do; so does CONTEXT_UPDATE 0.
+  SET_SHADER_CONSTANTS 0x43F0 writes c252-c255 as Xenia does. SET_CONSTANT2
+  writes a context register by its index (0x2102, VGT_INDX_OFFSET), as
+  Xenia does; 0x43F0 writes nothing a shader reads, predicated or not, and
+  0x4102 stalls the console. MEM_WRITE writes its first dword, swapped by
+  the address's endian bits (0-3 as Xenia), and the command processor then
+  reads the packet's remaining dwords as packets: a type 0 write there sets
+  its registers, a type 2 is filler, and a dword that reads as some other
+  header loses the stream (`cpload`'s 0x55667788, a type 1 header, stalled
+  it).
+- Bin predication (`cpbins`): a predicated packet (bit 0 of the type 3
+  header) runs when bin select & bin mask, as 64-bit values, is not 0, for
+  DRAW_INDX, DRAW_INDX_2, INDIRECT_BUFFER (its contents skipped as a whole),
+  SET_CONSTANT (ALU and registers) and SET_CONSTANT2. SET_BIN_MASK and
+  SET_BIN_SELECT take the low dword first, then the high. An indirect
+  buffer's SET_BIN_MASK_LO holds after it returns.
+- Screen extents (`cpext`, `cpext2`): EVENT_WRITE_EXT SCREEN_EXT_RPT writes
+  12 bytes: min x, max x, min y, max y, min z, max z, little-endian 16-bit
+  each, swapped by the address's endian bits (8in16 makes them big-endian
+  halfwords). x and y are the union, since the last SCREEN_EXT_INIT, of the
+  boxes of the primitives drawn, >> 3 (8-pixel units). A primitive's box
+  comes from its vertices, in pixel coordinates with centers on integers: x
+  from ceil(min x) to ceil(max x) - 1, likewise y, whether it covers a pixel
+  or not (a rectangle at x 7.6-7.9 gives min 1, max 0: pixels 8 to 7);
+  points by PA_SU_POINT_SIZE, lines likewise. It is after the window offset,
+  not cut by the window scissor, the low end clamped at 0. Culled
+  primitives don't count; RB_COLOR_MASK 0 doesn't matter. SCREEN_EXT_INIT
+  sets 03FF 0000 03FF 0000 07FF 0000, which a report with no draw since
+  writes; a report doesn't reset them, so a second report gives the union.
+  z stays 07FF 0000 with the depth test off or on (ALWAYS, with or without
+  depth writes, no HiZ). A predicated report that's skipped writes nothing.
+- Culling, user clip planes, VTE 0x400 (`cullclip`): coverage as Xenia for
+  cull none, front and back with face ccw and cw, in screen space and through
+  Direct3D's viewport; for PA_CL_CLIP_CNTL 0x80001 and 0x80003 (kept where
+  the plane's dot product with the clip-space position is >= 0), 0x90000 and
+  0x90003 (planes ignored when clipping is disabled); and for
+  PA_CL_VTE_CNTL 0x400 with W 1, 2 and 0.5. The word differences are the
+  pixel probe's known ones (`primitives`): -0 where an attribute is 0,
+  PsParamGen.zw, and attributes of clipped polygons a few units off
+  (9.99696 for 10).
+- Vertex snapping (`snap`, `snap2`): PA_SU_VTX_CNTL quant_mode 5, 6 and 7
+  rasterize nothing, at every round_mode. Modes 0 to 4 move the edges of
+  `snap2`'s wide rows as Xenia doesn't, which snaps no vertices.
+- Interpolation (`pixel`, `centroid`): a set SQ_INTERPOLATOR_CNTL.param_shade
+  bit interpolates, a clear one is flat. sc_sample_cntl 0 evaluates smooth
+  interpolators at the centroid, 1 at the center, 2 by sampling_pattern
+  (bit set center, clear centroid). The centroid is a covered sample, the
+  center only at 2x with both covered. PsParamGen is always the center. The
+  sample offsets are (1/4, -1/4) and (-1/4, 1/4) at 2x, and (3/8, -3/8),
+  (-1/8, -1/8), (1/8, 1/8) and (-3/8, 3/8) at 4x, y down.
