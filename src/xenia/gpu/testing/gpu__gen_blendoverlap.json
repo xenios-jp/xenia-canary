@@ -1,0 +1,6 @@
+{
+ "suite": "blendoverlap",
+ "source": "Xbox 360: three identical captures; repeated intra-draw and inter-draw float10 blending at 1x/2x/4x MSAA",
+ "xtr": "428d72e443e7dfc9619bf94a8089e290dd446a13",
+ "results": "f4cf000c675aa1b8dacd12e349bcb26122e11d2d"
+}
