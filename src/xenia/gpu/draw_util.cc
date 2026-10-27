@@ -90,6 +90,12 @@ bool IsRasterizationPotentiallyDone(const RegisterFile& regs,
       !IsVIZSurveyDraw(regs)) {
     return false;
   }
+  // The console rasterizes nothing with the quantization modes past 1 pixel
+  // (5, 6 and 7, at every rounding mode).
+  if (regs.Get<reg::PA_SU_VTX_CNTL>().quant_mode >
+      xenos::VertexQuantization::k_1) {
+    return false;
+  }
   if (primitive_polygonal) {
     auto pa_su_sc_mode_cntl = regs.Get<reg::PA_SU_SC_MODE_CNTL>();
     if (pa_su_sc_mode_cntl.cull_front && pa_su_sc_mode_cntl.cull_back) {
