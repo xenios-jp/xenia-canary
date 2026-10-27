@@ -253,6 +253,67 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
   std::array<spv::Id, 4> const_float_vectors_0_5 =
       make_float_constant_vectors(0.5f);
 
+  // Normalized export first truncates to 23 fractional bits, then rounds
+  // the exact scaled fixed-point value with ties towards positive infinity.
+  // Split q * (2^m - 1) into quotient and remainder to avoid 64-bit arithmetic.
+  auto normalize_fixed = [&](spv::Id value,
+                             const std::array<uint32_t, 4>& widths,
+                             unsigned int count, bool signed_value) {
+    spv::Id float_type = type_float_vectors_[count - 1];
+    spv::Id int_type = type_int_vectors_[count - 1];
+    spv::Id clamped = builder_->createTriBuiltinCall(
+        float_type, ext_inst_glsl_std_450_, GLSLstd450FClamp, value,
+        signed_value ? const_float_vectors_minus_1[count - 1]
+                     : const_float_vectors_0_[count - 1],
+        const_float_vectors_1_[count - 1]);
+    spv::Id q = builder_->createUnaryOp(
+        spv::OpConvertFToS, int_type,
+        builder_->createNoContractionBinOp(
+            spv::OpFMul, float_type, clamped,
+            builder_->smearScalar(spv::NoPrecision,
+                                  builder_->makeFloatConstant(0x1p23f),
+                                  float_type)));
+    auto int_components = [&](auto component) {
+      id_vector_temp_.clear();
+      for (unsigned int i = 0; i < count; ++i) {
+        id_vector_temp_.push_back(builder_->makeIntConstant(component(i)));
+      }
+      return count > 1
+                 ? builder_->makeCompositeConstant(int_type, id_vector_temp_)
+                 : id_vector_temp_.front();
+    };
+    spv::Id magnitude_bits = int_components([&](unsigned int i) {
+      return int(widths[i] - uint32_t(signed_value));
+    });
+    spv::Id quotient_shift = int_components([&](unsigned int i) {
+      return int(23 - widths[i] + uint32_t(signed_value));
+    });
+    spv::Id remainder_mask = int_components([&](unsigned int i) {
+      return int((uint32_t(1)
+                  << (23 - widths[i] + uint32_t(signed_value))) - 1);
+    });
+    spv::Id quotient = builder_->createBinOp(
+        spv::OpShiftRightArithmetic, int_type, q, quotient_shift);
+    spv::Id remainder = builder_->createBinOp(
+        spv::OpBitwiseAnd, int_type, q, remainder_mask);
+    spv::Id correction = builder_->createBinOp(
+        spv::OpISub, int_type,
+        builder_->createBinOp(spv::OpShiftLeftLogical, int_type, remainder,
+                              magnitude_bits),
+        q);
+    correction = builder_->createBinOp(
+        spv::OpIAdd, int_type, correction,
+        builder_->smearScalar(spv::NoPrecision,
+                              builder_->makeIntConstant(1 << 22), int_type));
+    correction = builder_->createBinOp(
+        spv::OpShiftRightArithmetic, int_type, correction,
+        builder_->smearScalar(spv::NoPrecision, builder_->makeIntConstant(23),
+                              int_type));
+    return builder_->createUnaryOp(
+        spv::OpConvertSToF, float_type,
+        builder_->createBinOp(spv::OpIAdd, int_type, quotient, correction));
+  };
+
   // Integer conversion has an asymmetric negative half-step threshold.
   // Separating integral and fractional parts also avoids rounding a value just
   // below +0.5 up to 1.0 while adding the rounding bias in float32.
@@ -382,28 +443,10 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
           is_norm, spv::SelectionControlDontFlattenMask, *builder_);
       EMIdArray eM_norm;
       {
-        // Signed normalized.
-        id_vector_temp_.clear();
-        for (unsigned int component_index = 0;
-             component_index < component_count; ++component_index) {
-          id_vector_temp_.push_back(builder_->makeFloatConstant(
-              float((uint32_t(1) << (widths[component_index] - 1)) - 1)));
-        }
-        spv::Id const_max_value =
-            component_count > 1
-                ? builder_->makeCompositeConstant(
-                      type_float_vectors_[component_count - 1], id_vector_temp_)
-                : id_vector_temp_.front();
+        // Quantize and scale using the console's fixed-point conversion.
         for_each_eM([&](uint32_t eM_index) {
-          eM_norm[eM_index] = builder_->createNoContractionBinOp(
-              spv::OpFMul, type_float_vectors_[component_count - 1],
-              builder_->createTriBuiltinCall(
-                  type_float_vectors_[component_count - 1],
-                  ext_inst_glsl_std_450_, GLSLstd450FClamp,
-                  eM_flushed[eM_index],
-                  const_float_vectors_minus_1[component_count - 1],
-                  const_float_vectors_1_[component_count - 1]),
-              const_max_value);
+          eM_norm[eM_index] = normalize_fixed(
+              eM_flushed[eM_index], widths, component_count, true);
         });
       }
       if_norm.makeEndIf();
@@ -431,28 +474,10 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
           is_norm, spv::SelectionControlDontFlattenMask, *builder_);
       EMIdArray eM_norm;
       {
-        // Unsigned normalized.
-        id_vector_temp_.clear();
-        for (unsigned int component_index = 0;
-             component_index < component_count; ++component_index) {
-          id_vector_temp_.push_back(builder_->makeFloatConstant(
-              float((uint32_t(1) << widths[component_index]) - 1)));
-        }
-        spv::Id const_max_value =
-            component_count > 1
-                ? builder_->makeCompositeConstant(
-                      type_float_vectors_[component_count - 1], id_vector_temp_)
-                : id_vector_temp_.front();
+        // Quantize and scale using the console's fixed-point conversion.
         for_each_eM([&](uint32_t eM_index) {
-          eM_norm[eM_index] = builder_->createNoContractionBinOp(
-              spv::OpFMul, type_float_vectors_[component_count - 1],
-              builder_->createTriBuiltinCall(
-                  type_float_vectors_[component_count - 1],
-                  ext_inst_glsl_std_450_, GLSLstd450FClamp,
-                  eM_flushed[eM_index],
-                  const_float_vectors_0_[component_count - 1],
-                  const_float_vectors_1_[component_count - 1]),
-              const_max_value);
+          eM_norm[eM_index] = normalize_fixed(
+              eM_flushed[eM_index], widths, component_count, false);
         });
       }
       if_norm.makeEndIf();
@@ -622,20 +647,10 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
           is_norm, spv::SelectionControlDontFlattenMask, *builder_);
       EMIdArray fixed16_norm;
       {
-        // Signed normalized.
-        id_vector_temp_.clear();
-        id_vector_temp_.resize(4, builder_->makeFloatConstant(
-                                      float((uint32_t(1) << (16 - 1)) - 1)));
-        spv::Id const_snorm16_max_value =
-            builder_->makeCompositeConstant(type_float4_, id_vector_temp_);
+        // Quantize and scale using the console's fixed-point conversion.
         for_each_eM([&](uint32_t eM_index) {
-          fixed16_norm[eM_index] = builder_->createNoContractionBinOp(
-              spv::OpFMul, type_float4_,
-              builder_->createTriBuiltinCall(
-                  type_float4_, ext_inst_glsl_std_450_, GLSLstd450FClamp,
-                  fixed16_flushed[eM_index], const_float_vectors_minus_1[3],
-                  const_float4_1_),
-              const_snorm16_max_value);
+          fixed16_norm[eM_index] = normalize_fixed(
+              fixed16_flushed[eM_index], std::array<uint32_t, 4>{16, 16, 16, 16}, 4, true);
         });
       }
       if_norm.makeEndIf();
@@ -664,19 +679,10 @@ void SpirvShaderTranslator::ExportToMemory(uint8_t export_eM) {
           is_norm, spv::SelectionControlDontFlattenMask, *builder_);
       EMIdArray fixed16_norm;
       {
-        // Unsigned normalized.
-        id_vector_temp_.clear();
-        id_vector_temp_.resize(
-            4, builder_->makeFloatConstant(float((uint32_t(1) << 16) - 1)));
-        spv::Id const_unorm16_max_value =
-            builder_->makeCompositeConstant(type_float4_, id_vector_temp_);
+        // Quantize and scale using the console's fixed-point conversion.
         for_each_eM([&](uint32_t eM_index) {
-          fixed16_norm[eM_index] = builder_->createNoContractionBinOp(
-              spv::OpFMul, type_float4_,
-              builder_->createTriBuiltinCall(
-                  type_float4_, ext_inst_glsl_std_450_, GLSLstd450FClamp,
-                  fixed16_flushed[eM_index], const_float4_0_, const_float4_1_),
-              const_unorm16_max_value);
+          fixed16_norm[eM_index] = normalize_fixed(
+              fixed16_flushed[eM_index], std::array<uint32_t, 4>{16, 16, 16, 16}, 4, false);
         });
       }
       if_norm.makeEndIf();
