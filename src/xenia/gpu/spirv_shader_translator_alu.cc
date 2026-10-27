@@ -773,6 +773,7 @@ void SpirvShaderTranslator::ProcessAluInstruction(
 
   if (predicate_written_vector || predicate_written_scalar) {
     cf_exec_predicate_written_ = true;
+    cf_predicate_equals_live_ = false;
     CloseInstructionPredication();
   }
 

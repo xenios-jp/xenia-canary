@@ -406,6 +406,11 @@ void SpirvShaderTranslator::Reset() {
 
   cf_exec_conditional_merge_ = nullptr;
   cf_instruction_predicate_merge_ = nullptr;
+  cf_exec_predicate_written_ = false;
+  cf_exec_marked_predicate_dirty_ = false;
+  cf_predicate_equals_live_ = true;
+  cf_predicate_certainly_dirty_ = false;
+  cf_exec_condition_is_live_ = false;
 }
 
 uint32_t SpirvShaderTranslator::GetModificationRegisterCount() const {
@@ -977,6 +982,12 @@ void SpirvShaderTranslator::StartTranslation() {
     var_main_predicate_ = builder_->createVariable(
         spv::NoPrecision, spv::StorageClassFunction, type_bool_,
         "xe_var_predicate", builder_->makeBoolConstant(false));
+    var_main_cf_predicate_ = builder_->createVariable(
+        spv::NoPrecision, spv::StorageClassFunction, type_bool_,
+        "xe_var_cf_predicate", builder_->makeBoolConstant(false));
+    var_main_cf_predicate_dirty_ = builder_->createVariable(
+        spv::NoPrecision, spv::StorageClassFunction, type_bool_,
+        "xe_var_cf_predicate_dirty", builder_->makeBoolConstant(false));
     var_main_loop_count_ = builder_->createVariable(
         spv::NoPrecision, spv::StorageClassFunction, type_uint4_,
         "xe_var_loop_count", const_uint4_0_);
@@ -1547,6 +1558,7 @@ void SpirvShaderTranslator::ProcessLabel(uint32_t cf_index) {
 
   // Close flow control within the previous switch case.
   CloseExecConditionals();
+  ForgetControlFlowPredicateState();
 
   if (cf_structured_) {
     // No switch - structured constructs are entered and exited in
@@ -1594,6 +1606,7 @@ void SpirvShaderTranslator::ProcessControlFlowInstructionBegin(
   }
   // Loop control is outside execs - actually close the last exec.
   CloseExecConditionals();
+  ForgetControlFlowPredicateState();
   EnsureBuildPointAvailable();
   CfStructuredConstruct& loop = cf_structured_constructs_.emplace_back();
   loop.end = loop_end;
@@ -1623,6 +1636,18 @@ void SpirvShaderTranslator::ProcessExecInstructionBegin(
 
 void SpirvShaderTranslator::ProcessExecInstructionEnd(
     const ParsedExecInstruction& instr) {
+  if (!instr.is_predicate_clean && !instr.is_end) {
+    // The next control flow read of the predicate takes a new copy of it.
+    CloseInstructionPredication();
+    EnsureBuildPointAvailable();
+    builder_->createStore(builder_->makeBoolConstant(true),
+                          var_main_cf_predicate_dirty_);
+    if (cf_exec_conditional_merge_) {
+      cf_exec_marked_predicate_dirty_ = true;
+    } else {
+      cf_predicate_certainly_dirty_ = true;
+    }
+  }
   if (instr.is_end) {
     // Break out of the main switch (if exists) and the main loop. Structured
     // control flow ends the shader only outside guest loops, where the main
@@ -1643,6 +1668,7 @@ void SpirvShaderTranslator::ProcessLoopStartInstruction(
 
   // Loop control is outside execs - actually close the last exec.
   CloseExecConditionals();
+  ForgetControlFlowPredicateState();
 
   EnsureBuildPointAvailable();
 
@@ -1756,6 +1782,7 @@ void SpirvShaderTranslator::ProcessLoopEndInstruction(
 
   // Loop control is outside execs - actually close the last exec.
   CloseExecConditionals();
+  ForgetControlFlowPredicateState();
 
   EnsureBuildPointAvailable();
 
@@ -1782,8 +1809,7 @@ void SpirvShaderTranslator::ProcessLoopEndInstruction(
   if (instr.is_predicated_break) {
     condition = builder_->createBinOp(
         instr.predicate_condition ? spv::OpLogicalOr : spv::OpLogicalAnd,
-        type_bool_, condition,
-        builder_->createLoad(var_main_predicate_, spv::NoPrecision));
+        type_bool_, condition, LoadControlFlowPredicate());
   }
 
   spv::Block& body_block = *builder_->getBuildPoint();
@@ -1898,7 +1924,7 @@ void SpirvShaderTranslator::ProcessJumpInstruction(
         spv::Id condition_id =
             instr.type == ParsedJumpInstruction::Type::kConditional
                 ? LoadBoolConstant(instr.bool_constant_index)
-                : builder_->createLoad(var_main_predicate_, spv::NoPrecision);
+                : LoadControlFlowPredicate();
         CfStructuredConstruct& selection =
             cf_structured_constructs_.emplace_back();
         selection.end = cf_structured_merges_[instr.dword_index];
@@ -2046,6 +2072,10 @@ void SpirvShaderTranslator::ResetUcodeInvocationStateInMain() {
   }
 
   builder_->createStore(builder_->makeBoolConstant(false), var_main_predicate_);
+  builder_->createStore(builder_->makeBoolConstant(false),
+                        var_main_cf_predicate_);
+  builder_->createStore(builder_->makeBoolConstant(false),
+                        var_main_cf_predicate_dirty_);
   builder_->createStore(const_uint4_0_, var_main_loop_count_);
   builder_->createStore(const_int_0_, var_main_address_register_);
   builder_->createStore(const_int4_0_, var_main_loop_address_);
@@ -4548,6 +4578,7 @@ void SpirvShaderTranslator::CloseStructuredSelections(uint32_t cf_index) {
     function_main_->addBlock(selection.merge);
     builder_->setBuildPoint(selection.merge);
     cf_structured_constructs_.pop_back();
+    ForgetControlFlowPredicateState();
   }
 }
 
@@ -4624,7 +4655,8 @@ void SpirvShaderTranslator::UpdateExecConditionals(
   } else if (type == ParsedExecInstruction::Type::kPredicated) {
     // Can merge predicated with predicated if the conditions are the same and
     // the previous exec hasn't modified the predicate register.
-    if (!cf_exec_predicate_written_ && cf_exec_conditional_merge_ &&
+    if (!cf_exec_predicate_written_ && !cf_exec_marked_predicate_dirty_ &&
+        cf_exec_conditional_merge_ &&
         cf_exec_bool_constant_or_predicate_ == kCfExecBoolConstantPredicate &&
         cf_exec_condition_ == condition) {
       return;
@@ -4649,7 +4681,8 @@ void SpirvShaderTranslator::UpdateExecConditionals(
     condition_id = LoadBoolConstant(bool_constant_index);
     cf_exec_bool_constant_or_predicate_ = bool_constant_index;
   } else if (type == ParsedExecInstruction::Type::kPredicated) {
-    condition_id = builder_->createLoad(var_main_predicate_, spv::NoPrecision);
+    condition_id = LoadControlFlowPredicate();
+    cf_exec_condition_is_live_ = cf_predicate_equals_live_;
     cf_exec_bool_constant_or_predicate_ = kCfExecBoolConstantPredicate;
   } else {
     assert_unhandled_case(type);
@@ -4685,8 +4718,10 @@ void SpirvShaderTranslator::UpdateInstructionPredication(bool predicated,
   // If the instruction predicate condition is the same as the exec predicate
   // condition, no need to open a check. However, if there was a `setp` prior
   // to this instruction, the predicate value now may be different than it was
-  // in the beginning of the exec.
-  if (!cf_exec_predicate_written_ && cf_exec_conditional_merge_ &&
+  // in the beginning of the exec. Nor if control flow checked its own copy of
+  // the predicate, which may be older than the predicate.
+  if (!cf_exec_predicate_written_ && cf_exec_condition_is_live_ &&
+      cf_exec_conditional_merge_ &&
       cf_exec_bool_constant_or_predicate_ == kCfExecBoolConstantPredicate &&
       cf_exec_condition_ == condition) {
     return;
@@ -4736,6 +4771,23 @@ void SpirvShaderTranslator::CloseExecConditionals() {
   }
   // Nothing relies on the predicate value being unchanged now.
   cf_exec_predicate_written_ = false;
+  cf_exec_marked_predicate_dirty_ = false;
+}
+
+spv::Id SpirvShaderTranslator::LoadControlFlowPredicate() {
+  EnsureBuildPointAvailable();
+  spv::Id cf_predicate = builder_->createTriOp(
+      spv::OpSelect, type_bool_,
+      builder_->createLoad(var_main_cf_predicate_dirty_, spv::NoPrecision),
+      builder_->createLoad(var_main_predicate_, spv::NoPrecision),
+      builder_->createLoad(var_main_cf_predicate_, spv::NoPrecision));
+  builder_->createStore(cf_predicate, var_main_cf_predicate_);
+  builder_->createStore(builder_->makeBoolConstant(false),
+                        var_main_cf_predicate_dirty_);
+  cf_predicate_equals_live_ =
+      cf_predicate_equals_live_ || cf_predicate_certainly_dirty_;
+  cf_predicate_certainly_dirty_ = false;
+  return cf_predicate;
 }
 
 spv::Id SpirvShaderTranslator::GetStorageAddressingIndex(

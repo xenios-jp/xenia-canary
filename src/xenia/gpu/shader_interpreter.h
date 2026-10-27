@@ -81,8 +81,20 @@ class ShaderInterpreter {
     uint32_t loop_iterators[4];
     int32_t address_register;
     bool predicate;
+    // The copy of the predicate control flow reads, taken at its first read of
+    // the predicate after an exec without the predicate clean bit.
+    bool cf_predicate;
+    bool cf_predicate_dirty;
 
     void Reset() { std::memset(this, 0, sizeof(*this)); }
+
+    bool LoadControlFlowPredicate() {
+      if (cf_predicate_dirty) {
+        cf_predicate = predicate;
+        cf_predicate_dirty = false;
+      }
+      return cf_predicate;
+    }
 
     int32_t GetLoopAddress() const {
       assert_true(loop_stack_depth && loop_stack_depth < 4);

@@ -42,7 +42,7 @@ class SpirvShaderTranslator : public ShaderTranslator {
     // version number! Backends add it to their dated
     // PipelineDescription::kVersion, so bumping either one is enough. Only
     // ever raise it, a reverted layout change needs another bump.
-    static constexpr uint32_t kVersion = 29;
+    static constexpr uint32_t kVersion = 30;
 
     enum class DepthStencilMode : uint32_t {
       kNoModifiers,
@@ -938,6 +938,16 @@ class SpirvShaderTranslator : public ShaderTranslator {
   // Opens or reopens the predicate check conditional for the instruction.
   // Should be called before processing a non-control-flow instruction.
   void UpdateInstructionPredication(bool predicated, bool condition);
+  // Loads the predicate as control flow sees it, refreshing the control flow
+  // copy first if an exec without the predicate clean bit has run since the
+  // last such read.
+  spv::Id LoadControlFlowPredicate();
+  // Forgets what's known at translation time about the control flow
+  // predicate, at points reachable from elsewhere.
+  void ForgetControlFlowPredicateState() {
+    cf_predicate_equals_live_ = false;
+    cf_predicate_certainly_dirty_ = false;
+  }
   // Closes the instruction-level predicate conditional if it's open, useful if
   // a control flow instruction needs to do some code which needs to respect the
   // current exec conditional, but can't itself be predicated.
@@ -1520,6 +1530,13 @@ class SpirvShaderTranslator : public ShaderTranslator {
   spv::Id main_system_constant_flags_;
   // bool.
   spv::Id var_main_predicate_;
+  // bool. The copy of the predicate control flow reads: the console takes it
+  // at the first control flow read of the predicate after an exec without the
+  // predicate clean bit, and keeps it until the next such exec.
+  spv::Id var_main_cf_predicate_;
+  // bool. Whether an exec without the predicate clean bit has run since
+  // control flow last read the predicate.
+  spv::Id var_main_cf_predicate_dirty_;
   // uint4.
   spv::Id var_main_loop_count_;
   // int4.
@@ -1708,6 +1725,19 @@ class SpirvShaderTranslator : public ShaderTranslator {
   // the exec-level predicate value, and can't merge two execs with the same
   // predicate condition anymore.
   bool cf_exec_predicate_written_;
+  // Whether the open exec conditional has set var_main_cf_predicate_dirty_,
+  // so the next predicated exec may read a different control flow predicate
+  // and can't be merged with it.
+  bool cf_exec_marked_predicate_dirty_;
+  // Known at translation time at this point: whether the control flow copy of
+  // the predicate equals the predicate itself, and whether
+  // var_main_cf_predicate_dirty_ is set. Not known after labels and loops.
+  bool cf_predicate_equals_live_;
+  bool cf_predicate_certainly_dirty_;
+  // Whether the open predicated exec conditional checks a control flow
+  // predicate known to equal the predicate itself, so instructions predicated
+  // on the same condition don't need their own check.
+  bool cf_exec_condition_is_live_;
 };
 
 }  // namespace gpu

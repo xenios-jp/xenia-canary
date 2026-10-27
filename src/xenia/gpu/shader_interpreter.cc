@@ -77,7 +77,8 @@ void ShaderInterpreter::Execute() {
             const ucode::ControlFlowCondExecPredInstruction cf_cond_exec_pred =
                 *reinterpret_cast<
                     const ucode::ControlFlowCondExecPredInstruction*>(&cf_exec);
-            if (cf_cond_exec_pred.condition() != state_.predicate) {
+            if (cf_cond_exec_pred.condition() !=
+                state_.LoadControlFlowPredicate()) {
               continue;
             }
           } break;
@@ -116,6 +117,21 @@ void ShaderInterpreter::Execute() {
             }
             ExecuteAluInstruction(alu_instr);
           }
+        }
+
+        switch (cf_opcode) {
+          case ucode::ControlFlowOpcode::kCondExec:
+          case ucode::ControlFlowOpcode::kCondExecEnd:
+            state_.cf_predicate_dirty = true;
+            break;
+          case ucode::ControlFlowOpcode::kCondExecPredClean:
+          case ucode::ControlFlowOpcode::kCondExecPredCleanEnd:
+            break;
+          default:
+            if (!cf_exec.is_predicate_clean()) {
+              state_.cf_predicate_dirty = true;
+            }
+            break;
         }
 
         if (ucode::DoesControlFlowOpcodeEndShader(cf_opcode)) {
@@ -171,7 +187,7 @@ void ShaderInterpreter::Execute() {
             ++state_.loop_iterators[state_.loop_stack_depth - 1];
         if (loop_iterator < loop_constant.count &&
             (!cf_loop_end.is_predicated_break() ||
-             cf_loop_end.condition() != state_.predicate)) {
+             cf_loop_end.condition() != state_.LoadControlFlowPredicate())) {
           cf_index_next = cf_loop_end.address();
           continue;
         }
@@ -188,7 +204,7 @@ void ShaderInterpreter::Execute() {
                 &cf_instr);
         if (!cf_cond_call.is_unconditional()) {
           if (cf_cond_call.is_predicated()) {
-            if (cf_cond_call.condition() != state_.predicate) {
+            if (cf_cond_call.condition() != state_.LoadControlFlowPredicate()) {
               continue;
             }
           } else {
@@ -219,7 +235,7 @@ void ShaderInterpreter::Execute() {
                 &cf_instr);
         if (!cf_cond_jmp.is_unconditional()) {
           if (cf_cond_jmp.is_predicated()) {
-            if (cf_cond_jmp.condition() != state_.predicate) {
+            if (cf_cond_jmp.condition() != state_.LoadControlFlowPredicate()) {
               continue;
             }
           } else {
